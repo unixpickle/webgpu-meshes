@@ -191,7 +191,17 @@ async function requestDevice(): Promise<any> {
   if (!adapter) {
     throw new Error('Unable to acquire a WebGPU adapter.');
   }
-  return adapter.requestDevice();
+  const adapterLimits = adapter.limits as Record<string, number | undefined> | undefined;
+  const requiredLimits: Record<string, number> = {};
+  if (adapterLimits?.maxStorageBufferBindingSize !== undefined) {
+    requiredLimits.maxStorageBufferBindingSize = adapterLimits.maxStorageBufferBindingSize;
+  }
+  if (adapterLimits?.maxBufferSize !== undefined) {
+    requiredLimits.maxBufferSize = adapterLimits.maxBufferSize;
+  }
+  return adapter.requestDevice({
+    requiredLimits,
+  });
 }
 
 function parseVec3(value: string, label: string): Vec3 {
