@@ -46,6 +46,23 @@ export class CPUMesh {
     }
   }
 
+  static fromTypedArrays(
+    positions: Float32Array,
+    cubeIndices: Int32Array,
+    originalFlags: Uint8Array,
+    triangleIndices: Int32Array,
+    triangleCount: number,
+  ): CPUMesh {
+    const mesh = Object.create(CPUMesh.prototype) as CPUMesh;
+    mesh.positions = positions;
+    mesh.cubeIndices = cubeIndices;
+    mesh.originalFlags = originalFlags;
+    mesh.triangleIndices = triangleIndices;
+    mesh.vertexCountValue = cubeIndices.length;
+    mesh.triangleCountValue = triangleCount;
+    return mesh;
+  }
+
   get vertexCount(): number {
     return this.vertexCountValue;
   }
@@ -69,6 +86,21 @@ export class CPUMesh {
     this.assertVertexIndex(index);
     const base = index * 3;
     return [this.positions[base], this.positions[base + 1], this.positions[base + 2]];
+  }
+
+  vertexX(index: number): number {
+    this.assertVertexIndex(index);
+    return this.positions[index * 3];
+  }
+
+  vertexY(index: number): number {
+    this.assertVertexIndex(index);
+    return this.positions[index * 3 + 1];
+  }
+
+  vertexZ(index: number): number {
+    this.assertVertexIndex(index);
+    return this.positions[index * 3 + 2];
   }
 
   setVertexPosition(index: number, position: Vec3): void {
@@ -127,6 +159,26 @@ export class CPUMesh {
       b: this.triangleIndices[base + 1],
       c: this.triangleIndices[base + 2],
     };
+  }
+
+  triangleExists(triIndex: number): boolean {
+    this.assertTriangleIndex(triIndex);
+    return this.triangleIndices[triIndex * 3] !== DELETED_TRIANGLE;
+  }
+
+  triangleA(triIndex: number): number {
+    this.assertTriangleIndex(triIndex);
+    return this.triangleIndices[triIndex * 3];
+  }
+
+  triangleB(triIndex: number): number {
+    this.assertTriangleIndex(triIndex);
+    return this.triangleIndices[triIndex * 3 + 1];
+  }
+
+  triangleC(triIndex: number): number {
+    this.assertTriangleIndex(triIndex);
+    return this.triangleIndices[triIndex * 3 + 2];
   }
 
   activeTriangleIndices(): number[] {

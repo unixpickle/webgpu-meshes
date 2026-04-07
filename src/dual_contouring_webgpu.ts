@@ -1,11 +1,10 @@
-import { CPUMesh, type CPUTriangle, type CPUVertex, type IndexedMesh } from './mesh';
+import { CPUMesh, type CPUTriangle, type IndexedMesh } from './mesh';
 import { qefWGSL } from './qef_wgsl';
 import {
   add,
   addScalar,
   clamp,
   clampVec3,
-  cross,
   dot,
   normalizeSafe,
   orthoBasis,
@@ -62,15 +61,10 @@ interface GridInfo {
   repairEpsilonWorld: number;
 }
 
-interface GPUCubeVertex {
-  active: boolean;
-  position: Vec3;
-}
-
-interface GPUTriangle {
-  a: number;
-  b: number;
-  c: number;
+interface DecodedGPUVertices {
+  positions: Float32Array;
+  cubeIndices: Int32Array;
+  originalFlags: Uint8Array;
 }
 
 interface SingularEdgeGroup {
@@ -468,23 +462,25 @@ async function dualContourWebGPUWithGPUHermite(options: DualContouringWebGPUOpti
   ]);
   markStage('GPU emit readback + map');
 
-  const cubes = decodeCubeVertices(cubeBytes);
-  const triangles = decodeTriangles(triangleBytes, triangleCount);
+  const vertices = decodeCubeVertices(cubeBytes);
+  const triangleIndices = decodeTriangles(triangleBytes, triangleCount);
   markStage('decode emitted mesh');
 
-  const cpuMesh = buildMeshFromGPUOutput(cubes, triangles);
+  const cpuMesh = buildMeshFromGPUOutput(vertices, triangleIndices, triangleCount);
   markStage('CPU mesh assembly');
   const initial = cpuMesh.compact();
   markStage('compact initial mesh');
 
   if (config.repair) {
     resolveDuplicateOriginalVertices(cpuMesh, grid);
+    markStage('repair: resolve duplicates');
     const edgeRepairEpsilon = grid.repairEpsilonWorld * 0.49;
     repairSingularEdges(cpuMesh, grid, edgeRepairEpsilon, config.clip);
+    markStage('repair: singular edges');
     repairSingularVertices(cpuMesh, grid, edgeRepairEpsilon, config.clip);
-    markStage('CPU repair');
+    markStage('repair: singular vertices');
   } else {
-    markStage('CPU repair (skipped)');
+    markStage('repair: skipped');
   }
 
   const repaired = cpuMesh.compact();
@@ -584,44 +580,47 @@ async function readBuffer(buffer: any): Promise<ArrayBuffer> {
   return out;
 }
 
-function buildMeshFromGPUOutput(cubes: GPUCubeVertex[], triangles: GPUTriangle[]): CPUMesh {
-  const vertices: CPUVertex[] = cubes.map((cube, cubeIndex) => (
-    cube.active
-      ? { position: cube.position, cubeIndex, original: true }
-      : { position: [0, 0, 0], cubeIndex: null, original: false }
-  ));
-
-  return new CPUMesh(vertices, triangles as CPUTriangle[]);
+function buildMeshFromGPUOutput(vertices: DecodedGPUVertices, triangleIndices: Int32Array, triangleCount: number): CPUMesh {
+  return CPUMesh.fromTypedArrays(
+    vertices.positions,
+    vertices.cubeIndices,
+    vertices.originalFlags,
+    triangleIndices,
+    triangleCount,
+  );
 }
 
-function decodeCubeVertices(bytes: ArrayBuffer): GPUCubeVertex[] {
+function decodeCubeVertices(bytes: ArrayBuffer): DecodedGPUVertices {
   const view = new DataView(bytes);
-  const result: GPUCubeVertex[] = new Array(bytes.byteLength / 32);
-  for (let i = 0; i < result.length; i++) {
+  const count = Math.floor(bytes.byteLength / 32);
+  const positions = new Float32Array(count * 3);
+  const cubeIndices = new Int32Array(count);
+  const originalFlags = new Uint8Array(count);
+  cubeIndices.fill(-1);
+  for (let i = 0; i < count; i++) {
     const base = i * 32;
-    result[i] = {
-      active: view.getUint32(base + 0, true) !== 0,
-      position: [
-        view.getFloat32(base + 16, true),
-        view.getFloat32(base + 20, true),
-        view.getFloat32(base + 24, true),
-      ],
-    };
+    if (view.getUint32(base + 0, true) !== 0) {
+      const dst = i * 3;
+      positions[dst] = view.getFloat32(base + 16, true);
+      positions[dst + 1] = view.getFloat32(base + 20, true);
+      positions[dst + 2] = view.getFloat32(base + 24, true);
+      cubeIndices[i] = i;
+      originalFlags[i] = 1;
+    }
   }
-  return result;
+  return { positions, cubeIndices, originalFlags };
 }
 
-function decodeTriangles(bytes: ArrayBuffer, count: number): GPUTriangle[] {
+function decodeTriangles(bytes: ArrayBuffer, count: number): Int32Array {
   const view = new DataView(bytes);
   const safeCount = Math.min(count, Math.floor(bytes.byteLength / 16));
-  const result: GPUTriangle[] = new Array(safeCount);
+  const result = new Int32Array(safeCount * 3);
   for (let i = 0; i < safeCount; i++) {
     const base = i * 16;
-    result[i] = {
-      a: view.getUint32(base + 0, true),
-      b: view.getUint32(base + 4, true),
-      c: view.getUint32(base + 8, true),
-    };
+    const dst = i * 3;
+    result[dst] = view.getUint32(base + 0, true);
+    result[dst + 1] = view.getUint32(base + 4, true);
+    result[dst + 2] = view.getUint32(base + 8, true);
   }
   return result;
 }
@@ -637,22 +636,15 @@ function exclusiveScanCounts(counts: Uint32Array, baseOffset = 0): { offsets: Ui
 }
 
 function resolveDuplicateOriginalVertices(mesh: CPUMesh, grid: GridInfo): void {
-  const groups = new Map<string, number[]>();
+  const groups = new Map<number, Map<number, Map<number, number[]>>>();
   for (let i = 0; i < mesh.vertexCount; i++) {
     if (!mesh.vertexOriginal(i)) continue;
     const cubeIndex = mesh.vertexCubeIndex(i);
     if (cubeIndex === null) continue;
-    const key = vec3ExactKey(mesh.vertexPosition(i));
-    let ids = groups.get(key);
-    if (!ids) {
-      ids = [];
-      groups.set(key, ids);
-    }
-    ids.push(i);
+    pushPositionBitGroup(groups, mesh, i, i);
   }
 
-  for (const ids of groups.values()) {
-    if (ids.length <= 1) continue;
+  for (const ids of positionBitGroupValues(groups)) {
     for (let k = 0; k < ids.length; k++) {
       const vid = ids[k];
       const cubeIndex = mesh.vertexCubeIndex(vid);
@@ -661,19 +653,12 @@ function resolveDuplicateOriginalVertices(mesh: CPUMesh, grid: GridInfo): void {
       mesh.setVertexPosition(vid, clampVec3(mesh.vertexPosition(vid), addScalar(min, grid.cubeMarginWorld), addScalar(max, -grid.cubeMarginWorld)));
     }
 
-    const remaining = new Map<string, number[]>();
+    const remaining = new Map<number, Map<number, Map<number, number[]>>>();
     for (const vid of ids) {
-      const key = vec3ExactKey(mesh.vertexPosition(vid));
-      let arr = remaining.get(key);
-      if (!arr) {
-        arr = [];
-        remaining.set(key, arr);
-      }
-      arr.push(vid);
+      pushPositionBitGroup(remaining, mesh, vid, vid);
     }
 
-    for (const same of remaining.values()) {
-      if (same.length <= 1) continue;
+    for (const same of positionBitGroupValues(remaining)) {
       for (let i = 1; i < same.length; i++) {
         const vid = same[i];
         const cubeIndex = mesh.vertexCubeIndex(vid);
@@ -697,17 +682,15 @@ function repairSingularEdges(mesh: CPUMesh, grid: GridInfo, epsilon: number, cli
     const toClamp = new Set<number>();
     for (const group of groups) {
       for (const [ta, tb] of group.pairs) {
-        const triA = mesh.triangle(ta);
-        const triB = mesh.triangle(tb);
-        if (triA) {
-          toClamp.add(triA.a);
-          toClamp.add(triA.b);
-          toClamp.add(triA.c);
+        if (mesh.triangleExists(ta)) {
+          toClamp.add(mesh.triangleA(ta));
+          toClamp.add(mesh.triangleB(ta));
+          toClamp.add(mesh.triangleC(ta));
         }
-        if (triB) {
-          toClamp.add(triB.a);
-          toClamp.add(triB.b);
-          toClamp.add(triB.c);
+        if (mesh.triangleExists(tb)) {
+          toClamp.add(mesh.triangleA(tb));
+          toClamp.add(mesh.triangleB(tb));
+          toClamp.add(mesh.triangleC(tb));
         }
       }
     }
@@ -729,13 +712,12 @@ function repairSingularEdges(mesh: CPUMesh, grid: GridInfo, epsilon: number, cli
 
       const pair = refreshed.pairs[i];
       for (const triId of pair) {
-        const tri = mesh.triangle(triId);
-        if (!tri) continue;
-        const other = thirdVertexOfTriangle(tri, refreshed.u, refreshed.v);
+        if (!mesh.triangleExists(triId)) continue;
+        const other = thirdVertexOfTriangleId(mesh, triId, refreshed.u, refreshed.v);
         if (other < 0) continue;
         let t1: CPUTriangle = { a: other, b: refreshed.u, c: newVertexId };
         let t2: CPUTriangle = { a: other, b: newVertexId, c: refreshed.v };
-        const originalOrientation = segmentOrientation(tri, other, refreshed.u);
+        const originalOrientation = segmentOrientationById(mesh, triId, other, refreshed.u);
         if (segmentOrientation(t1, other, refreshed.u) !== originalOrientation) {
           t1 = { a: refreshed.u, b: other, c: newVertexId };
           t2 = { a: newVertexId, b: other, c: refreshed.v };
@@ -757,11 +739,10 @@ function repairSingularVertices(mesh: CPUMesh, grid: GridInfo, epsilon: number, 
     for (const group of groups) {
       for (const component of group.components) {
         for (const triId of component) {
-          const tri = mesh.triangle(triId);
-          if (!tri) continue;
-          toClamp.add(tri.a);
-          toClamp.add(tri.b);
-          toClamp.add(tri.c);
+          if (!mesh.triangleExists(triId)) continue;
+          toClamp.add(mesh.triangleA(triId));
+          toClamp.add(mesh.triangleB(triId));
+          toClamp.add(mesh.triangleC(triId));
         }
       }
     }
@@ -774,14 +755,13 @@ function repairSingularVertices(mesh: CPUMesh, grid: GridInfo, epsilon: number, 
     for (const component of group.components) {
       let dir: Vec3 = [0, 0, 0];
       for (const triId of component) {
-        const tri = mesh.triangle(triId);
-        if (!tri) continue;
-        const [o1, o2] = otherSegmentOfTriangle(tri, v);
+        if (!mesh.triangleExists(triId)) continue;
+        const [o1, o2] = otherSegmentOfTriangleById(mesh, triId, v);
         const p1 = mesh.vertexPosition(o1);
         const p2 = mesh.vertexPosition(o2);
         const dotv = clamp(dot(normalizeSafe(sub(p1, center), [1, 0, 0]), normalizeSafe(sub(p2, center), [0, 1, 0])), -1.0, 1.0);
         const theta = Math.acos(dotv);
-        dir = add(dir, scale(triangleNormal(mesh, tri), -theta));
+        dir = add(dir, scale(triangleNormalById(mesh, triId), -theta));
       }
       const newVertexId = mesh.addVertex({
         position: add(center, scale(normalizeSafe(dir, hashDirection(v)), epsilon)),
@@ -803,11 +783,13 @@ function repairSingularVertices(mesh: CPUMesh, grid: GridInfo, epsilon: number, 
 function singularEdgeGroups(mesh: CPUMesh): SingularEdgeGroup[] {
   const edgeMap = new Map<string, { u: number; v: number; triangles: number[] }>();
   for (let i = 0; i < mesh.triangleCount; i++) {
-    const tri = mesh.triangle(i);
-    if (!tri) continue;
-    appendEdgeRecord(edgeMap, tri.a, tri.b, i);
-    appendEdgeRecord(edgeMap, tri.b, tri.c, i);
-    appendEdgeRecord(edgeMap, tri.c, tri.a, i);
+    if (!mesh.triangleExists(i)) continue;
+    const a = mesh.triangleA(i);
+    const b = mesh.triangleB(i);
+    const c = mesh.triangleC(i);
+    appendEdgeRecord(edgeMap, a, b, i);
+    appendEdgeRecord(edgeMap, b, c, i);
+    appendEdgeRecord(edgeMap, c, a, i);
   }
 
   const groups: SingularEdgeGroup[] = [];
@@ -836,13 +818,12 @@ function buildSingularEdgeGroup(mesh: CPUMesh, u: number, v: number, triIndices:
   const midpoint = scale(add(p0, p1), 0.5);
 
   const sortable = triIndices.map((triId) => {
-    const tri = mesh.triangle(triId)!;
-    const other = thirdVertexOfTriangle(tri, u, v);
+    const other = thirdVertexOfTriangleId(mesh, triId, u, v);
     const triVec = normalizeSafe(sub(mesh.vertexPosition(other), midpoint), b1);
     const x = dot(b1, triVec);
     const y = dot(b2, triVec);
     const theta = Math.atan2(y, x);
-    const normal = triangleNormal(mesh, tri);
+    const normal = triangleNormalById(mesh, triId);
     const nx = dot(b1, normal);
     const ny = dot(b2, normal);
     const normalDir = (nx * y - ny * x) > 0;
@@ -856,10 +837,9 @@ function buildSingularEdgeGroup(mesh: CPUMesh, u: number, v: number, triIndices:
   }
 
   for (let i = 0; i < sortable.length; i += 2) {
-    const triA = mesh.triangle(sortable[i].triId)!;
+    const triAId = sortable[i].triId;
     for (let j = i + 1; j < sortable.length; j++) {
-      const triB = mesh.triangle(sortable[j].triId)!;
-      if (segmentOrientation(triA, u, v) !== segmentOrientation(triB, u, v)) {
+      if (segmentOrientationById(mesh, triAId, u, v) !== segmentOrientationById(mesh, sortable[j].triId, u, v)) {
         if (j !== i + 1) {
           const tmp = sortable[i + 1];
           sortable[i + 1] = sortable[j];
@@ -884,11 +864,10 @@ function buildSingularEdgeGroup(mesh: CPUMesh, u: number, v: number, triIndices:
 function singularVertexGroups(mesh: CPUMesh): SingularVertexGroup[] {
   const vertexToTriangles = new Map<number, number[]>();
   for (let i = 0; i < mesh.triangleCount; i++) {
-    const tri = mesh.triangle(i);
-    if (!tri) continue;
-    pushMapArray(vertexToTriangles, tri.a, i);
-    pushMapArray(vertexToTriangles, tri.b, i);
-    pushMapArray(vertexToTriangles, tri.c, i);
+    if (!mesh.triangleExists(i)) continue;
+    pushMapArray(vertexToTriangles, mesh.triangleA(i), i);
+    pushMapArray(vertexToTriangles, mesh.triangleB(i), i);
+    pushMapArray(vertexToTriangles, mesh.triangleC(i), i);
   }
 
   const result: SingularVertexGroup[] = [];
@@ -898,9 +877,9 @@ function singularVertexGroups(mesh: CPUMesh): SingularVertexGroup[] {
     const edgeAroundVertex = new Map<number, number[]>();
 
     for (let localIndex = 0; localIndex < triIndices.length; localIndex++) {
-      const tri = mesh.triangle(triIndices[localIndex]);
-      if (!tri) continue;
-      const [o1, o2] = otherSegmentOfTriangle(tri, vertexId);
+      const triId = triIndices[localIndex];
+      if (!mesh.triangleExists(triId)) continue;
+      const [o1, o2] = otherSegmentOfTriangleById(mesh, triId, vertexId);
       pushMapArray(edgeAroundVertex, o1, localIndex);
       pushMapArray(edgeAroundVertex, o2, localIndex);
     }
@@ -932,18 +911,34 @@ function appendEdgeRecord(map: Map<string, { u: number; v: number; triangles: nu
   record.triangles.push(triId);
 }
 
-function thirdVertexOfTriangle(tri: CPUTriangle, u: number, v: number): number {
-  if (tri.a !== u && tri.a !== v) return tri.a;
-  if (tri.b !== u && tri.b !== v) return tri.b;
-  if (tri.c !== u && tri.c !== v) return tri.c;
+function thirdVertexOfTriangleId(mesh: CPUMesh, triId: number, u: number, v: number): number {
+  const a = mesh.triangleA(triId);
+  const b = mesh.triangleB(triId);
+  const c = mesh.triangleC(triId);
+  if (a !== u && a !== v) return a;
+  if (b !== u && b !== v) return b;
+  if (c !== u && c !== v) return c;
   return -1;
 }
 
-function otherSegmentOfTriangle(tri: CPUTriangle, v: number): [number, number] {
-  if (tri.a === v) return [tri.b, tri.c];
-  if (tri.b === v) return [tri.c, tri.a];
-  if (tri.c === v) return [tri.a, tri.b];
+function otherSegmentOfTriangleById(mesh: CPUMesh, triId: number, v: number): [number, number] {
+  const a = mesh.triangleA(triId);
+  const b = mesh.triangleB(triId);
+  const c = mesh.triangleC(triId);
+  if (a === v) return [b, c];
+  if (b === v) return [c, a];
+  if (c === v) return [a, b];
   throw new Error('vertex is not part of triangle');
+}
+
+function segmentOrientationById(mesh: CPUMesh, triId: number, u: number, v: number): boolean {
+  const a = mesh.triangleA(triId);
+  const b = mesh.triangleB(triId);
+  const c = mesh.triangleC(triId);
+  if (a === u) return c === v;
+  if (b === u) return a === v;
+  if (c === u) return b === v;
+  throw new Error('segmentOrientation(): first edge endpoint not present in triangle');
 }
 
 function segmentOrientation(tri: CPUTriangle, u: number, v: number): boolean {
@@ -952,6 +947,13 @@ function segmentOrientation(tri: CPUTriangle, u: number, v: number): boolean {
     if (verts[i] === u) return verts[(i + 2) % 3] === v;
   }
   throw new Error('segmentOrientation(): first edge endpoint not present in triangle');
+}
+
+function triangleNormalById(mesh: CPUMesh, triId: number): Vec3 {
+  const a = mesh.triangleA(triId);
+  const b = mesh.triangleB(triId);
+  const c = mesh.triangleC(triId);
+  return triangleNormalFromIds(mesh, a, b, c);
 }
 
 function clampOriginalVertex(mesh: CPUMesh, vertexId: number, grid: GridInfo, epsilon: number): void {
@@ -1017,15 +1019,67 @@ function pushMapArray<K>(map: Map<K, number[]>, key: K, value: number): void {
   arr.push(value);
 }
 
-function triangleNormal(mesh: CPUMesh, tri: CPUTriangle): Vec3 {
-  const a = mesh.vertexPosition(tri.a);
-  const b = mesh.vertexPosition(tri.b);
-  const c = mesh.vertexPosition(tri.c);
-  return normalizeSafe(cross(sub(b, a), sub(c, a)), [1, 0, 0]);
+function triangleNormalFromIds(mesh: CPUMesh, aId: number, bId: number, cId: number): Vec3 {
+  const ax = mesh.vertexX(aId);
+  const ay = mesh.vertexY(aId);
+  const az = mesh.vertexZ(aId);
+  const abx = mesh.vertexX(bId) - ax;
+  const aby = mesh.vertexY(bId) - ay;
+  const abz = mesh.vertexZ(bId) - az;
+  const acx = mesh.vertexX(cId) - ax;
+  const acy = mesh.vertexY(cId) - ay;
+  const acz = mesh.vertexZ(cId) - az;
+  const nx = aby * acz - abz * acy;
+  const ny = abz * acx - abx * acz;
+  const nz = abx * acy - aby * acx;
+  const norm2 = nx * nx + ny * ny + nz * nz;
+  if (norm2 <= 1e-20) {
+    return [1, 0, 0];
+  }
+  const invNorm = 1 / Math.sqrt(norm2);
+  return [nx * invNorm, ny * invNorm, nz * invNorm];
 }
 
-function vec3ExactKey(v: Vec3): string {
-  return `${float32Bits(v[0])}:${float32Bits(v[1])}:${float32Bits(v[2])}`;
+function pushPositionBitGroup(
+  groups: Map<number, Map<number, Map<number, number[]>>>,
+  mesh: CPUMesh,
+  vertexId: number,
+  value: number,
+): void {
+  const xBits = float32Bits(mesh.vertexX(vertexId));
+  const yBits = float32Bits(mesh.vertexY(vertexId));
+  const zBits = float32Bits(mesh.vertexZ(vertexId));
+
+  let yzMap = groups.get(xBits);
+  if (!yzMap) {
+    yzMap = new Map<number, Map<number, number[]>>();
+    groups.set(xBits, yzMap);
+  }
+
+  let zMap = yzMap.get(yBits);
+  if (!zMap) {
+    zMap = new Map<number, number[]>();
+    yzMap.set(yBits, zMap);
+  }
+
+  let arr = zMap.get(zBits);
+  if (!arr) {
+    arr = [];
+    zMap.set(zBits, arr);
+  }
+  arr.push(value);
+}
+
+function positionBitGroupValues(groups: Map<number, Map<number, Map<number, number[]>>>): number[][] {
+  const result: number[][] = [];
+  for (const yzMap of groups.values()) {
+    for (const zMap of yzMap.values()) {
+      for (const ids of zMap.values()) {
+        if (ids.length > 1) result.push(ids);
+      }
+    }
+  }
+  return result;
 }
 
 const f32Scratch = new Float32Array(1);
