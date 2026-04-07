@@ -638,10 +638,11 @@ function exclusiveScanCounts(counts: Uint32Array, baseOffset = 0): { offsets: Ui
 
 function resolveDuplicateOriginalVertices(mesh: CPUMesh, grid: GridInfo): void {
   const groups = new Map<string, number[]>();
-  for (let i = 0; i < mesh.vertices.length; i++) {
-    const v = mesh.vertices[i];
-    if (!v.original || v.cubeIndex === null) continue;
-    const key = vec3ExactKey(v.position);
+  for (let i = 0; i < mesh.vertexCount; i++) {
+    if (!mesh.vertexOriginal(i)) continue;
+    const cubeIndex = mesh.vertexCubeIndex(i);
+    if (cubeIndex === null) continue;
+    const key = vec3ExactKey(mesh.vertexPosition(i));
     let ids = groups.get(key);
     if (!ids) {
       ids = [];
@@ -654,15 +655,15 @@ function resolveDuplicateOriginalVertices(mesh: CPUMesh, grid: GridInfo): void {
     if (ids.length <= 1) continue;
     for (let k = 0; k < ids.length; k++) {
       const vid = ids[k];
-      const vertex = mesh.vertices[vid];
-      if (vertex.cubeIndex === null) continue;
-      const [min, max] = cubeBoundsFromIndex(vertex.cubeIndex, grid);
-      vertex.position = clampVec3(vertex.position, addScalar(min, grid.cubeMarginWorld), addScalar(max, -grid.cubeMarginWorld));
+      const cubeIndex = mesh.vertexCubeIndex(vid);
+      if (cubeIndex === null) continue;
+      const [min, max] = cubeBoundsFromIndex(cubeIndex, grid);
+      mesh.setVertexPosition(vid, clampVec3(mesh.vertexPosition(vid), addScalar(min, grid.cubeMarginWorld), addScalar(max, -grid.cubeMarginWorld)));
     }
 
     const remaining = new Map<string, number[]>();
     for (const vid of ids) {
-      const key = vec3ExactKey(mesh.vertices[vid].position);
+      const key = vec3ExactKey(mesh.vertexPosition(vid));
       let arr = remaining.get(key);
       if (!arr) {
         arr = [];
@@ -675,13 +676,14 @@ function resolveDuplicateOriginalVertices(mesh: CPUMesh, grid: GridInfo): void {
       if (same.length <= 1) continue;
       for (let i = 1; i < same.length; i++) {
         const vid = same[i];
-        const v = mesh.vertices[vid];
-        if (v.cubeIndex === null) continue;
-        const [min, max] = cubeBoundsFromIndex(v.cubeIndex, grid);
+        const cubeIndex = mesh.vertexCubeIndex(vid);
+        if (cubeIndex === null) continue;
+        const [min, max] = cubeBoundsFromIndex(cubeIndex, grid);
         const center = scale(add(min, max), 0.5);
-        const dir = normalizeSafe(sub(center, v.position), hashDirection(v.cubeIndex));
+        const position = mesh.vertexPosition(vid);
+        const dir = normalizeSafe(sub(center, position), hashDirection(cubeIndex));
         const maxStep = Math.max(grid.cubeMarginWorld * 0.5, grid.repairEpsilonWorld * 0.25);
-        v.position = clampVec3(add(v.position, scale(dir, maxStep)), addScalar(min, grid.cubeMarginWorld), addScalar(max, -grid.cubeMarginWorld));
+        mesh.setVertexPosition(vid, clampVec3(add(position, scale(dir, maxStep)), addScalar(min, grid.cubeMarginWorld), addScalar(max, -grid.cubeMarginWorld)));
       }
     }
   }
@@ -709,18 +711,17 @@ function repairSingularEdges(mesh: CPUMesh, grid: GridInfo, epsilon: number, cli
         }
       }
     }
-    for (const vid of toClamp) clampOriginalVertex(mesh.vertices[vid], grid, epsilon);
+    for (const vid of toClamp) clampOriginalVertex(mesh, vid, grid, epsilon);
   }
 
   for (const group of groups) {
     const refreshed = recomputeSingularEdgeGroup(mesh, group.u, group.v);
     if (!refreshed || refreshed.pairs.length === 0) continue;
 
-    const edgeMid = scale(add(mesh.vertices[group.u].position, mesh.vertices[group.v].position), 0.5);
+    const edgeMid = scale(add(mesh.vertexPosition(group.u), mesh.vertexPosition(group.v)), 0.5);
     for (let i = 0; i < refreshed.pairs.length; i++) {
       const inwardDir = refreshed.inwardDirs[i];
-      const newVertexId = mesh.vertices.length;
-      mesh.vertices.push({
+      const newVertexId = mesh.addVertex({
         position: add(edgeMid, scale(inwardDir, epsilon)),
         cubeIndex: null,
         original: false,
@@ -764,26 +765,25 @@ function repairSingularVertices(mesh: CPUMesh, grid: GridInfo, epsilon: number, 
         }
       }
     }
-    for (const vid of toClamp) clampOriginalVertex(mesh.vertices[vid], grid, epsilon);
+    for (const vid of toClamp) clampOriginalVertex(mesh, vid, grid, epsilon);
   }
 
   for (const group of groups) {
     const v = group.vertex;
-    const center = mesh.vertices[v].position;
+    const center = mesh.vertexPosition(v);
     for (const component of group.components) {
       let dir: Vec3 = [0, 0, 0];
       for (const triId of component) {
         const tri = mesh.triangle(triId);
         if (!tri) continue;
         const [o1, o2] = otherSegmentOfTriangle(tri, v);
-        const p1 = mesh.vertices[o1].position;
-        const p2 = mesh.vertices[o2].position;
+        const p1 = mesh.vertexPosition(o1);
+        const p2 = mesh.vertexPosition(o2);
         const dotv = clamp(dot(normalizeSafe(sub(p1, center), [1, 0, 0]), normalizeSafe(sub(p2, center), [0, 1, 0])), -1.0, 1.0);
         const theta = Math.acos(dotv);
         dir = add(dir, scale(triangleNormal(mesh, tri), -theta));
       }
-      const newVertexId = mesh.vertices.length;
-      mesh.vertices.push({
+      const newVertexId = mesh.addVertex({
         position: add(center, scale(normalizeSafe(dir, hashDirection(v)), epsilon)),
         cubeIndex: null,
         original: false,
@@ -794,6 +794,7 @@ function repairSingularVertices(mesh: CPUMesh, grid: GridInfo, epsilon: number, 
         if (tri.a === v) tri.a = newVertexId;
         else if (tri.b === v) tri.b = newVertexId;
         else if (tri.c === v) tri.c = newVertexId;
+        mesh.setTriangle(triId, tri);
       }
     }
   }
@@ -801,7 +802,7 @@ function repairSingularVertices(mesh: CPUMesh, grid: GridInfo, epsilon: number, 
 
 function singularEdgeGroups(mesh: CPUMesh): SingularEdgeGroup[] {
   const edgeMap = new Map<string, { u: number; v: number; triangles: number[] }>();
-  for (let i = 0; i < mesh.triangles.length; i++) {
+  for (let i = 0; i < mesh.triangleCount; i++) {
     const tri = mesh.triangle(i);
     if (!tri) continue;
     appendEdgeRecord(edgeMap, tri.a, tri.b, i);
@@ -828,8 +829,8 @@ function recomputeSingularEdgeGroup(mesh: CPUMesh, u: number, v: number): Singul
 function buildSingularEdgeGroup(mesh: CPUMesh, u: number, v: number, triIndices: number[]): SingularEdgeGroup | null {
   if (triIndices.length <= 2 || triIndices.length % 2 !== 0) return null;
 
-  const p0 = mesh.vertices[u].position;
-  const p1 = mesh.vertices[v].position;
+  const p0 = mesh.vertexPosition(u);
+  const p1 = mesh.vertexPosition(v);
   const axis = normalizeSafe(sub(p0, p1), [1, 0, 0]);
   const [b1, b2] = orthoBasis(axis);
   const midpoint = scale(add(p0, p1), 0.5);
@@ -837,7 +838,7 @@ function buildSingularEdgeGroup(mesh: CPUMesh, u: number, v: number, triIndices:
   const sortable = triIndices.map((triId) => {
     const tri = mesh.triangle(triId)!;
     const other = thirdVertexOfTriangle(tri, u, v);
-    const triVec = normalizeSafe(sub(mesh.vertices[other].position, midpoint), b1);
+    const triVec = normalizeSafe(sub(mesh.vertexPosition(other), midpoint), b1);
     const x = dot(b1, triVec);
     const y = dot(b2, triVec);
     const theta = Math.atan2(y, x);
@@ -882,7 +883,7 @@ function buildSingularEdgeGroup(mesh: CPUMesh, u: number, v: number, triIndices:
 
 function singularVertexGroups(mesh: CPUMesh): SingularVertexGroup[] {
   const vertexToTriangles = new Map<number, number[]>();
-  for (let i = 0; i < mesh.triangles.length; i++) {
+  for (let i = 0; i < mesh.triangleCount; i++) {
     const tri = mesh.triangle(i);
     if (!tri) continue;
     pushMapArray(vertexToTriangles, tri.a, i);
@@ -953,10 +954,12 @@ function segmentOrientation(tri: CPUTriangle, u: number, v: number): boolean {
   throw new Error('segmentOrientation(): first edge endpoint not present in triangle');
 }
 
-function clampOriginalVertex(vertex: CPUVertex, grid: GridInfo, epsilon: number): void {
-  if (!vertex.original || vertex.cubeIndex === null) return;
-  const [min, max] = cubeBoundsFromIndex(vertex.cubeIndex, grid);
-  vertex.position = clampVec3(vertex.position, addScalar(min, epsilon), addScalar(max, -epsilon));
+function clampOriginalVertex(mesh: CPUMesh, vertexId: number, grid: GridInfo, epsilon: number): void {
+  if (!mesh.vertexOriginal(vertexId)) return;
+  const cubeIndex = mesh.vertexCubeIndex(vertexId);
+  if (cubeIndex === null) return;
+  const [min, max] = cubeBoundsFromIndex(cubeIndex, grid);
+  mesh.setVertexPosition(vertexId, clampVec3(mesh.vertexPosition(vertexId), addScalar(min, epsilon), addScalar(max, -epsilon)));
 }
 
 function cubeBoundsFromIndex(cubeIndex: number, grid: GridInfo): [Vec3, Vec3] {
@@ -1015,9 +1018,9 @@ function pushMapArray<K>(map: Map<K, number[]>, key: K, value: number): void {
 }
 
 function triangleNormal(mesh: CPUMesh, tri: CPUTriangle): Vec3 {
-  const a = mesh.vertices[tri.a].position;
-  const b = mesh.vertices[tri.b].position;
-  const c = mesh.vertices[tri.c].position;
+  const a = mesh.vertexPosition(tri.a);
+  const b = mesh.vertexPosition(tri.b);
+  const c = mesh.vertexPosition(tri.c);
   return normalizeSafe(cross(sub(b, a), sub(c, a)), [1, 0, 0]);
 }
 
