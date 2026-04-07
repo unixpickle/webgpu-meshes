@@ -77,7 +77,7 @@ boundsMinTextarea.value = '-1.25, -1.25, -1.25';
 boundsMaxTextarea.value = '1.25, 1.25, 1.25';
 deltaInput.value = '0.1';
 filenameInput.value = 'dual-contour-sphere.stl';
-repairInput.checked = false;
+repairInput.checked = true;
 statusBox.textContent = gpuNavigator.gpu
   ? 'Ready. WebGPU detected.'
   : 'WebGPU is not available in this browser.';

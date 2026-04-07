@@ -332,8 +332,8 @@ function normalizeOptions(options: DualContouringWebGPUOptions): Required<Omit<D
     singularValueEpsilon: options.singularValueEpsilon ?? 0.1,
     l2Penalty: options.l2Penalty ?? 0,
     triangleMode: options.triangleMode ?? 'max-min-area',
-    bisectionSteps: options.bisectionSteps ?? 8,
-    normalStep: options.normalStep ?? Math.max(options.delta * 0.5, 1e-4),
+    bisectionSteps: options.bisectionSteps ?? 32,
+    normalStep: options.normalStep ?? 1e-4,
     workgroupSize: options.workgroupSize ?? 256,
     label: options.label ?? 'dual-contour-webgpu',
   };
@@ -875,7 +875,86 @@ function buildShaderBundle(solidWGSL: string, workgroupSize: number): ShaderBund
   };
 }
 
+function surfaceHelpersWGSL(): string {
+  return /* wgsl */`
+fn estimateNormal(p: vec3<f32>) -> vec3<f32> {
+  let eps = max(params.normalStep, 1e-5);
+  var axes = array<vec3<f32>, 3>(
+    vec3<f32>(-0.7107294727984605, -0.12934902142019175, 0.6914712193238857) * eps,
+    vec3<f32>(0.09870891687574183, -0.9915624053549226, -0.08402705526185106) * eps,
+    vec3<f32>(0.696505682837434, 0.008533870423146774, 0.7175005274080017) * eps,
+  );
+  var contains = array<u32, 3>(
+    select(0u, 1u, solidOccupancy(p + axes[0])),
+    select(0u, 1u, solidOccupancy(p + axes[1])),
+    select(0u, 1u, solidOccupancy(p + axes[2])),
+  );
+  var planeAxes = array<vec3<f32>, 2>(vec3<f32>(0.0), vec3<f32>(0.0));
+
+  for (var i = 0u; i < 2u; i++) {
+    var v1 = axes[i];
+    let c1 = contains[i] != 0u;
+    var v2 = axes[i + 1u];
+    let c2 = contains[i + 1u] != 0u;
+    if (!c1) {
+      v1 = -v1;
+    }
+    if (c2) {
+      v2 = -v2;
+    }
+    for (var j = 0u; j < 18u; j++) {
+      var mp = v1 + v2;
+      let mpNorm = length(mp);
+      if (mpNorm > 1e-20) {
+        mp *= eps / mpNorm;
+      }
+      if (solidOccupancy(p + mp)) {
+        v1 = mp;
+      } else {
+        v2 = mp;
+      }
+    }
+    planeAxes[i] = v1 + v2;
+    if (i == 0u && abs(dot(planeAxes[0], axes[1])) > abs(dot(planeAxes[0], axes[0]))) {
+      let tmpAxis = axes[0];
+      axes[0] = axes[1];
+      axes[1] = tmpAxis;
+      let tmpContains = contains[0];
+      contains[0] = contains[1];
+      contains[1] = tmpContains;
+    }
+  }
+
+  var res = normalize(cross(planeAxes[0], planeAxes[1]));
+  if (solidOccupancy(p + res * eps)) {
+    res = -res;
+  }
+  return res;
+}
+
+fn bisectOccupancyEdge(p0: vec3<f32>, p1: vec3<f32>, occ0: bool) -> vec3<f32> {
+  var lo = p0;
+  var hi = p1;
+  var loOcc = occ0;
+  var i = 0u;
+  loop {
+    if (i >= params.bisectionSteps) { break; }
+    let mid = 0.5 * (lo + hi);
+    let midOcc = solidOccupancy(mid);
+    if (midOcc == loOcc) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+    i = i + 1u;
+  }
+  return 0.5 * (lo + hi);
+}
+`;
+}
+
 function wgslHeader(solidWGSL: string): string {
+  const surfaceHelpers = surfaceHelpersWGSL();
   return /* wgsl */`
 struct DCParams {
   minCorner: vec3<f32>,
@@ -960,41 +1039,7 @@ fn cubeMax(ix: u32, iy: u32, iz: u32) -> vec3<f32> {
   return cornerPosition(ix + 1u, iy + 1u, iz + 1u);
 }
 
-fn occupancyScalar(p: vec3<f32>) -> f32 {
-  return select(1.0, -1.0, solidOccupancy(p));
-}
-
-fn estimateNormal(p: vec3<f32>) -> vec3<f32> {
-  let h = max(params.normalStep, 1e-5);
-  let dx = occupancyScalar(p + vec3<f32>(h, 0.0, 0.0)) - occupancyScalar(p - vec3<f32>(h, 0.0, 0.0));
-  let dy = occupancyScalar(p + vec3<f32>(0.0, h, 0.0)) - occupancyScalar(p - vec3<f32>(0.0, h, 0.0));
-  let dz = occupancyScalar(p + vec3<f32>(0.0, 0.0, h)) - occupancyScalar(p - vec3<f32>(0.0, 0.0, h));
-  let g = vec3<f32>(dx, dy, dz);
-  let g2 = dot(g, g);
-  if (g2 < 1e-12) {
-    return vec3<f32>(1.0, 0.0, 0.0);
-  }
-  return normalize(g);
-}
-
-fn bisectOccupancyEdge(p0: vec3<f32>, p1: vec3<f32>, occ0: bool) -> vec3<f32> {
-  var lo = p0;
-  var hi = p1;
-  var loOcc = occ0;
-  var i = 0u;
-  loop {
-    if (i >= params.bisectionSteps) { break; }
-    let mid = 0.5 * (lo + hi);
-    let midOcc = solidOccupancy(mid);
-    if (midOcc == loOcc) {
-      lo = mid;
-    } else {
-      hi = mid;
-    }
-    i = i + 1u;
-  }
-  return 0.5 * (lo + hi);
-}
+${surfaceHelpers}
 
 fn triNormal(a: vec3<f32>, b: vec3<f32>, c: vec3<f32>) -> vec3<f32> {
   let n = cross(b - a, c - a);
