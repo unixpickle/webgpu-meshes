@@ -52,6 +52,10 @@ root.innerHTML = `
           <input id="filename" type="text" />
         </label>
         <label class="toggle">
+          <input id="clip" type="checkbox" />
+          <span>Clip</span>
+        </label>
+        <label class="toggle">
           <input id="repair" type="checkbox" />
           <span>CPU repair</span>
         </label>
@@ -68,6 +72,7 @@ const boundsMinTextarea = getElement<HTMLTextAreaElement>('bounds-min');
 const boundsMaxTextarea = getElement<HTMLTextAreaElement>('bounds-max');
 const deltaInput = getElement<HTMLInputElement>('delta');
 const filenameInput = getElement<HTMLInputElement>('filename');
+const clipInput = getElement<HTMLInputElement>('clip');
 const repairInput = getElement<HTMLInputElement>('repair');
 const generateButton = getElement<HTMLButtonElement>('generate');
 const statusBox = getElement<HTMLElement>('status');
@@ -77,6 +82,7 @@ boundsMinTextarea.value = '-1.25, -1.25, -1.25';
 boundsMaxTextarea.value = '1.25, 1.25, 1.25';
 deltaInput.value = '0.1';
 filenameInput.value = 'dual-contour-sphere.stl';
+clipInput.checked = false;
 repairInput.checked = true;
 statusBox.textContent = gpuNavigator.gpu
   ? 'Ready. WebGPU detected.'
@@ -115,6 +121,7 @@ generateButton.addEventListener('click', async () => {
       min,
       max,
       delta,
+      clip: clipInput.checked,
       repair: repairInput.checked,
       label: 'webui-dual-contour',
     });

@@ -62,6 +62,17 @@ interface GridInfo {
   repairEpsilonWorld: number;
 }
 
+interface CPUHermiteEdge {
+  active: boolean;
+  position: Vec3;
+  normal: Vec3;
+}
+
+interface GPUCubeVertex {
+  active: boolean;
+  position: Vec3;
+}
+
 interface SingularEdgeGroup {
   u: number;
   v: number;
@@ -75,6 +86,10 @@ interface SingularVertexGroup {
 }
 
 export async function dualContourWebGPU(options: DualContouringWebGPUOptions): Promise<DualContourResult> {
+  return dualContourWebGPUWithGPUHermite(options);
+}
+
+async function dualContourWebGPUWithGPUHermite(options: DualContouringWebGPUOptions): Promise<DualContourResult> {
   const config = normalizeOptions(options);
   const grid = createGridInfo(config.min, config.max, config.delta, config.noJitter, config.cubeMargin, config.repairEpsilon);
 
@@ -82,14 +97,10 @@ export async function dualContourWebGPU(options: DualContouringWebGPUOptions): P
   const workgroupSize = config.workgroupSize;
 
   const cornerCount = (grid.nx + 1) * (grid.ny + 1) * (grid.nz + 1);
-  const cubeCount = grid.nx * grid.ny * grid.nz;
   const xEdgeCount = grid.nx * (grid.ny + 1) * (grid.nz + 1);
   const yEdgeCount = (grid.nx + 1) * grid.ny * (grid.nz + 1);
   const zEdgeCount = (grid.nx + 1) * (grid.ny + 1) * grid.nz;
-  const usableXEdgeCount = grid.nx * Math.max(0, grid.ny - 1) * Math.max(0, grid.nz - 1);
-  const usableYEdgeCount = Math.max(0, grid.nx - 1) * grid.ny * Math.max(0, grid.nz - 1);
-  const usableZEdgeCount = Math.max(0, grid.nx - 1) * Math.max(0, grid.ny - 1) * grid.nz;
-  const maxTriangleCount = 2 * (usableXEdgeCount + usableYEdgeCount + usableZEdgeCount);
+  const cubeCount = grid.nx * grid.ny * grid.nz;
 
   const cornerBuffer = device.createBuffer({
     label: `${config.label}-corners`,
@@ -98,37 +109,27 @@ export async function dualContourWebGPU(options: DualContouringWebGPUOptions): P
   });
 
   const hermiteStride = 48;
-  const cubeStride = 32;
-  const triangleStride = 16;
 
   const xEdgeBuffer = device.createBuffer({
     label: `${config.label}-x-edges`,
     size: xEdgeCount * hermiteStride,
-    usage: GPUBufferUsageAny.STORAGE,
+    usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_SRC,
   });
   const yEdgeBuffer = device.createBuffer({
     label: `${config.label}-y-edges`,
     size: yEdgeCount * hermiteStride,
-    usage: GPUBufferUsageAny.STORAGE,
+    usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_SRC,
   });
   const zEdgeBuffer = device.createBuffer({
     label: `${config.label}-z-edges`,
     size: zEdgeCount * hermiteStride,
-    usage: GPUBufferUsageAny.STORAGE,
+    usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_SRC,
   });
+
+  const cubeStride = 32;
   const cubeBuffer = device.createBuffer({
     label: `${config.label}-cubes`,
     size: cubeCount * cubeStride,
-    usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_SRC,
-  });
-  const triangleCounterBuffer = device.createBuffer({
-    label: `${config.label}-triangle-counter`,
-    size: 4,
-    usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_SRC | GPUBufferUsageAny.COPY_DST,
-  });
-  const triangleBuffer = device.createBuffer({
-    label: `${config.label}-triangles`,
-    size: Math.max(1, maxTriangleCount) * triangleStride,
     usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_SRC,
   });
 
@@ -138,7 +139,6 @@ export async function dualContourWebGPU(options: DualContouringWebGPUOptions): P
     usage: GPUBufferUsageAny.UNIFORM | GPUBufferUsageAny.COPY_DST,
   });
   device.queue.writeBuffer(uniformBuffer, 0, packUniforms(grid, config));
-  device.queue.writeBuffer(triangleCounterBuffer, 0, new Uint32Array([0]));
 
   const shaders = buildShaderBundle(config.solidWGSL, workgroupSize);
   const cornerPipeline = device.createComputePipeline({
@@ -165,21 +165,6 @@ export async function dualContourWebGPU(options: DualContouringWebGPUOptions): P
     label: `${config.label}-cube-pipeline`,
     layout: 'auto',
     compute: { module: device.createShaderModule({ code: shaders.cube }), entryPoint: 'main' },
-  });
-  const emitXPipeline = device.createComputePipeline({
-    label: `${config.label}-emit-x-pipeline`,
-    layout: 'auto',
-    compute: { module: device.createShaderModule({ code: shaders.emitX }), entryPoint: 'main' },
-  });
-  const emitYPipeline = device.createComputePipeline({
-    label: `${config.label}-emit-y-pipeline`,
-    layout: 'auto',
-    compute: { module: device.createShaderModule({ code: shaders.emitY }), entryPoint: 'main' },
-  });
-  const emitZPipeline = device.createComputePipeline({
-    label: `${config.label}-emit-z-pipeline`,
-    layout: 'auto',
-    compute: { module: device.createShaderModule({ code: shaders.emitZ }), entryPoint: 'main' },
   });
 
   const cornerBindGroup = device.createBindGroup({
@@ -224,53 +209,30 @@ export async function dualContourWebGPU(options: DualContouringWebGPUOptions): P
       { binding: 5, resource: { buffer: cubeBuffer } },
     ],
   });
-  const emitXBindGroup = device.createBindGroup({
-    layout: emitXPipeline.getBindGroupLayout(0),
-    entries: [
-      { binding: 0, resource: { buffer: uniformBuffer } },
-      { binding: 1, resource: { buffer: cornerBuffer } },
-      { binding: 2, resource: { buffer: xEdgeBuffer } },
-      { binding: 3, resource: { buffer: cubeBuffer } },
-      { binding: 4, resource: { buffer: triangleCounterBuffer } },
-      { binding: 5, resource: { buffer: triangleBuffer } },
-    ],
-  });
-  const emitYBindGroup = device.createBindGroup({
-    layout: emitYPipeline.getBindGroupLayout(0),
-    entries: [
-      { binding: 0, resource: { buffer: uniformBuffer } },
-      { binding: 1, resource: { buffer: cornerBuffer } },
-      { binding: 2, resource: { buffer: yEdgeBuffer } },
-      { binding: 3, resource: { buffer: cubeBuffer } },
-      { binding: 4, resource: { buffer: triangleCounterBuffer } },
-      { binding: 5, resource: { buffer: triangleBuffer } },
-    ],
-  });
-  const emitZBindGroup = device.createBindGroup({
-    layout: emitZPipeline.getBindGroupLayout(0),
-    entries: [
-      { binding: 0, resource: { buffer: uniformBuffer } },
-      { binding: 1, resource: { buffer: cornerBuffer } },
-      { binding: 2, resource: { buffer: zEdgeBuffer } },
-      { binding: 3, resource: { buffer: cubeBuffer } },
-      { binding: 4, resource: { buffer: triangleCounterBuffer } },
-      { binding: 5, resource: { buffer: triangleBuffer } },
-    ],
-  });
 
+  const cornerReadback = device.createBuffer({
+    label: `${config.label}-corner-readback`,
+    size: cornerCount * 4,
+    usage: GPUBufferUsageAny.COPY_DST | GPUBufferUsageAny.MAP_READ,
+  });
+  const xEdgeReadback = device.createBuffer({
+    label: `${config.label}-x-edge-readback`,
+    size: xEdgeCount * hermiteStride,
+    usage: GPUBufferUsageAny.COPY_DST | GPUBufferUsageAny.MAP_READ,
+  });
+  const yEdgeReadback = device.createBuffer({
+    label: `${config.label}-y-edge-readback`,
+    size: yEdgeCount * hermiteStride,
+    usage: GPUBufferUsageAny.COPY_DST | GPUBufferUsageAny.MAP_READ,
+  });
+  const zEdgeReadback = device.createBuffer({
+    label: `${config.label}-z-edge-readback`,
+    size: zEdgeCount * hermiteStride,
+    usage: GPUBufferUsageAny.COPY_DST | GPUBufferUsageAny.MAP_READ,
+  });
   const cubeReadback = device.createBuffer({
     label: `${config.label}-cube-readback`,
     size: cubeCount * cubeStride,
-    usage: GPUBufferUsageAny.COPY_DST | GPUBufferUsageAny.MAP_READ,
-  });
-  const triangleCounterReadback = device.createBuffer({
-    label: `${config.label}-triangle-counter-readback`,
-    size: 4,
-    usage: GPUBufferUsageAny.COPY_DST | GPUBufferUsageAny.MAP_READ,
-  });
-  const triangleReadback = device.createBuffer({
-    label: `${config.label}-triangle-readback`,
-    size: Math.max(1, maxTriangleCount) * triangleStride,
     usage: GPUBufferUsageAny.COPY_DST | GPUBufferUsageAny.MAP_READ,
   });
 
@@ -283,27 +245,35 @@ export async function dualContourWebGPU(options: DualContouringWebGPUOptions): P
     dispatch1D(pass, yEdgePipeline, yEdgeBindGroup, yEdgeCount, workgroupSize);
     dispatch1D(pass, zEdgePipeline, zEdgeBindGroup, zEdgeCount, workgroupSize);
     dispatch1D(pass, cubePipeline, cubeBindGroup, cubeCount, workgroupSize);
-    dispatch1D(pass, emitXPipeline, emitXBindGroup, xEdgeCount, workgroupSize);
-    dispatch1D(pass, emitYPipeline, emitYBindGroup, yEdgeCount, workgroupSize);
-    dispatch1D(pass, emitZPipeline, emitZBindGroup, zEdgeCount, workgroupSize);
 
     pass.end();
   }
 
+  encoder.copyBufferToBuffer(cornerBuffer, 0, cornerReadback, 0, cornerCount * 4);
+  encoder.copyBufferToBuffer(xEdgeBuffer, 0, xEdgeReadback, 0, xEdgeCount * hermiteStride);
+  encoder.copyBufferToBuffer(yEdgeBuffer, 0, yEdgeReadback, 0, yEdgeCount * hermiteStride);
+  encoder.copyBufferToBuffer(zEdgeBuffer, 0, zEdgeReadback, 0, zEdgeCount * hermiteStride);
   encoder.copyBufferToBuffer(cubeBuffer, 0, cubeReadback, 0, cubeCount * cubeStride);
-  encoder.copyBufferToBuffer(triangleCounterBuffer, 0, triangleCounterReadback, 0, 4);
-  encoder.copyBufferToBuffer(triangleBuffer, 0, triangleReadback, 0, Math.max(1, maxTriangleCount) * triangleStride);
   device.queue.submit([encoder.finish()]);
   await device.queue.onSubmittedWorkDone();
 
-  const [cubeBytes, triCountBytes, triBytes] = await Promise.all([
+  const [cornerBytes, xEdgeBytes, yEdgeBytes, zEdgeBytes, cubeBytes] = await Promise.all([
+    readBuffer(cornerReadback),
+    readBuffer(xEdgeReadback),
+    readBuffer(yEdgeReadback),
+    readBuffer(zEdgeReadback),
     readBuffer(cubeReadback),
-    readBuffer(triangleCounterReadback),
-    readBuffer(triangleReadback),
   ]);
 
-  const emittedTriangleCount = new Uint32Array(triCountBytes)[0] ?? 0;
-  const cpuMesh = decodeInitialMesh(cubeBytes, triBytes, emittedTriangleCount, grid);
+  const cpuMesh = buildInitialMeshFromGPUCubes(
+    new Uint32Array(cornerBytes),
+    decodeCubeVertices(cubeBytes),
+    decodeHermiteEdges(xEdgeBytes),
+    decodeHermiteEdges(yEdgeBytes),
+    decodeHermiteEdges(zEdgeBytes),
+    grid,
+    config.triangleMode,
+  );
   const initial = cpuMesh.compact();
 
   if (config.repair) {
@@ -408,36 +378,170 @@ async function readBuffer(buffer: any): Promise<ArrayBuffer> {
   return out;
 }
 
-function decodeInitialMesh(cubeBytes: ArrayBuffer, triangleBytes: ArrayBuffer, triangleCount: number, grid: GridInfo): CPUMesh {
-  const cubeView = new DataView(cubeBytes);
-  const triangleView = new DataView(triangleBytes);
-  const cubeCount = grid.nx * grid.ny * grid.nz;
-  const vertices: CPUVertex[] = new Array(cubeCount);
-
-  for (let i = 0; i < cubeCount; i++) {
-    const base = i * 32;
-    const active = cubeView.getUint32(base + 0, true) !== 0;
-    const px = cubeView.getFloat32(base + 16, true);
-    const py = cubeView.getFloat32(base + 20, true);
-    const pz = cubeView.getFloat32(base + 24, true);
-    vertices[i] = {
-      position: [px, py, pz],
-      cubeIndex: active ? i : null,
-      original: active,
-    };
-  }
+function buildInitialMeshFromGPUCubes(
+  corners: Uint32Array,
+  cubes: GPUCubeVertex[],
+  xEdges: CPUHermiteEdge[],
+  yEdges: CPUHermiteEdge[],
+  zEdges: CPUHermiteEdge[],
+  grid: GridInfo,
+  triangleMode: TriangleMode,
+): CPUMesh {
+  const vertices: CPUVertex[] = cubes.map((cube, cubeIndex) => (
+    cube.active
+      ? { position: cube.position, cubeIndex, original: true }
+      : { position: [0, 0, 0], cubeIndex: null, original: false }
+  ));
 
   const triangles: CPUTriangle[] = [];
-  for (let i = 0; i < triangleCount; i++) {
-    const base = i * 16;
-    const a = triangleView.getUint32(base + 0, true);
-    const b = triangleView.getUint32(base + 4, true);
-    const c = triangleView.getUint32(base + 8, true);
-    if (a === b || b === c || c === a) continue;
-    triangles.push({ a, b, c });
-  }
-
+  appendEdgeTrianglesCPU(triangles, vertices, corners, xEdges, grid, triangleMode, 'x');
+  appendEdgeTrianglesCPU(triangles, vertices, corners, yEdges, grid, triangleMode, 'y');
+  appendEdgeTrianglesCPU(triangles, vertices, corners, zEdges, grid, triangleMode, 'z');
   return new CPUMesh(vertices, triangles);
+}
+
+function decodeHermiteEdges(bytes: ArrayBuffer): CPUHermiteEdge[] {
+  const view = new DataView(bytes);
+  const result: CPUHermiteEdge[] = new Array(bytes.byteLength / 48);
+  for (let i = 0; i < result.length; i++) {
+    const base = i * 48;
+    result[i] = {
+      active: view.getUint32(base + 0, true) !== 0,
+      position: [
+        view.getFloat32(base + 16, true),
+        view.getFloat32(base + 20, true),
+        view.getFloat32(base + 24, true),
+      ],
+      normal: [
+        view.getFloat32(base + 32, true),
+        view.getFloat32(base + 36, true),
+        view.getFloat32(base + 40, true),
+      ],
+    };
+  }
+  return result;
+}
+
+function decodeCubeVertices(bytes: ArrayBuffer): GPUCubeVertex[] {
+  const view = new DataView(bytes);
+  const result: GPUCubeVertex[] = new Array(bytes.byteLength / 32);
+  for (let i = 0; i < result.length; i++) {
+    const base = i * 32;
+    result[i] = {
+      active: view.getUint32(base + 0, true) !== 0,
+      position: [
+        view.getFloat32(base + 16, true),
+        view.getFloat32(base + 20, true),
+        view.getFloat32(base + 24, true),
+      ],
+    };
+  }
+  return result;
+}
+
+function appendEdgeTrianglesCPU(
+  triangles: CPUTriangle[],
+  vertices: CPUVertex[],
+  corners: Uint32Array,
+  edges: CPUHermiteEdge[],
+  grid: GridInfo,
+  triangleMode: TriangleMode,
+  axis: 'x' | 'y' | 'z',
+): void {
+  const total = axis === 'x'
+    ? grid.nx * (grid.ny + 1) * (grid.nz + 1)
+    : axis === 'y'
+      ? (grid.nx + 1) * grid.ny * (grid.nz + 1)
+      : (grid.nx + 1) * (grid.ny + 1) * grid.nz;
+  for (let i = 0; i < total; i++) {
+    const edge = edges[i];
+    if (!edge.active) continue;
+
+    let ids: [number, number, number, number];
+    let flipCorner: number;
+    if (axis === 'x') {
+      const ix = i % grid.nx;
+      const t = Math.floor(i / grid.nx);
+      const iy = t % (grid.ny + 1);
+      const iz = Math.floor(t / (grid.ny + 1));
+      if (iy === 0 || iz === 0 || iy >= grid.ny || iz >= grid.nz) continue;
+      ids = [
+        cubeIndexCPU(grid, ix, iy, iz - 1),
+        cubeIndexCPU(grid, ix, iy - 1, iz - 1),
+        cubeIndexCPU(grid, ix, iy - 1, iz),
+        cubeIndexCPU(grid, ix, iy, iz),
+      ];
+      flipCorner = cornerIndexCPU(grid, ix, iy, iz);
+    } else if (axis === 'y') {
+      const ix = i % (grid.nx + 1);
+      const t = Math.floor(i / (grid.nx + 1));
+      const iy = t % grid.ny;
+      const iz = Math.floor(t / grid.ny);
+      if (ix === 0 || iz === 0 || ix >= grid.nx || iz >= grid.nz) continue;
+      ids = [
+        cubeIndexCPU(grid, ix - 1, iy, iz),
+        cubeIndexCPU(grid, ix - 1, iy, iz - 1),
+        cubeIndexCPU(grid, ix, iy, iz - 1),
+        cubeIndexCPU(grid, ix, iy, iz),
+      ];
+      flipCorner = cornerIndexCPU(grid, ix, iy, iz);
+    } else {
+      const ix = i % (grid.nx + 1);
+      const t = Math.floor(i / (grid.nx + 1));
+      const iy = t % (grid.ny + 1);
+      const iz = Math.floor(t / (grid.ny + 1));
+      if (ix === 0 || iy === 0 || ix >= grid.nx || iy >= grid.ny) continue;
+      ids = [
+        cubeIndexCPU(grid, ix, iy - 1, iz),
+        cubeIndexCPU(grid, ix - 1, iy - 1, iz),
+        cubeIndexCPU(grid, ix - 1, iy, iz),
+        cubeIndexCPU(grid, ix, iy, iz),
+      ];
+      flipCorner = cornerIndexCPU(grid, ix, iy, iz);
+    }
+
+    if (ids.some((id) => vertices[id].cubeIndex === null)) continue;
+    let quad: [number, number, number, number] = ids;
+    if (corners[flipCorner] !== 0) {
+      quad = [ids[3], ids[2], ids[1], ids[0]];
+    }
+    const p0 = vertices[quad[0]].position;
+    const p1 = vertices[quad[1]].position;
+    const p2 = vertices[quad[2]].position;
+    const p3 = vertices[quad[3]].position;
+    if (chooseFirstDiagonalCPU(p0, p1, p2, p3, triangleMode)) {
+      triangles.push({ a: quad[0], b: quad[1], c: quad[2] }, { a: quad[0], b: quad[2], c: quad[3] });
+    } else {
+      triangles.push({ a: quad[1], b: quad[2], c: quad[3] }, { a: quad[1], b: quad[3], c: quad[0] });
+    }
+  }
+}
+
+function chooseFirstDiagonalCPU(v0: Vec3, v1: Vec3, v2: Vec3, v3: Vec3, mode: TriangleMode): boolean {
+  const areaA = Math.min(triangleArea2CPU(v0, v1, v2), triangleArea2CPU(v0, v2, v3));
+  const areaB = Math.min(triangleArea2CPU(v1, v2, v3), triangleArea2CPU(v1, v3, v0));
+  const dotA = dot(triangleNormalCPU(v0, v1, v2), triangleNormalCPU(v0, v2, v3));
+  const dotB = dot(triangleNormalCPU(v1, v2, v3), triangleNormalCPU(v1, v3, v0));
+  if (mode === 'max-min-area') return areaA > areaB;
+  if (mode === 'sharpest') return dotA < dotB;
+  return dotA > dotB;
+}
+
+function triangleNormalCPU(a: Vec3, b: Vec3, c: Vec3): Vec3 {
+  return normalizeSafe(cross(sub(b, a), sub(c, a)), [1, 0, 0]);
+}
+
+function triangleArea2CPU(a: Vec3, b: Vec3, c: Vec3): number {
+  const n = cross(sub(b, a), sub(c, a));
+  return Math.hypot(n[0], n[1], n[2]);
+}
+
+function cornerIndexCPU(grid: GridInfo, ix: number, iy: number, iz: number): number {
+  return ix + (grid.nx + 1) * (iy + (grid.ny + 1) * iz);
+}
+
+function cubeIndexCPU(grid: GridInfo, ix: number, iy: number, iz: number): number {
+  return ix + grid.nx * (iy + grid.ny * iz);
 }
 
 function resolveDuplicateOriginalVertices(mesh: CPUMesh, grid: GridInfo): void {
@@ -875,7 +979,7 @@ function buildShaderBundle(solidWGSL: string, workgroupSize: number): ShaderBund
   };
 }
 
-function surfaceHelpersWGSL(): string {
+function surfaceHelpersWGSL(_solidWGSL: string): string {
   return /* wgsl */`
 fn estimateNormal(p: vec3<f32>) -> vec3<f32> {
   let eps = max(params.normalStep, 1e-5);
@@ -954,7 +1058,7 @@ fn bisectOccupancyEdge(p0: vec3<f32>, p1: vec3<f32>, occ0: bool) -> vec3<f32> {
 }
 
 function wgslHeader(solidWGSL: string): string {
-  const surfaceHelpers = surfaceHelpersWGSL();
+  const surfaceHelpers = surfaceHelpersWGSL(solidWGSL);
   return /* wgsl */`
 struct DCParams {
   minCorner: vec3<f32>,
@@ -1397,6 +1501,17 @@ ${decode}
 
 export const exampleSphereSolidWGSL = /* wgsl */`
 fn solidOccupancy(p: vec3<f32>) -> bool {
+  let center = vec3<f32>(0.0, 0.0, 0.0);
+  let radius = 1.0;
+  return distance(p, center) <= radius;
+}
+`;
+
+export const exampleCutCornerSphereSolidWGSL = /* wgsl */`
+fn solidOccupancy(p: vec3<f32>) -> bool {
+  if (p.x > 0 && p.y > 0 && p.z > 0) {
+    return false;
+  }
   let center = vec3<f32>(0.0, 0.0, 0.0);
   let radius = 1.0;
   return distance(p, center) <= radius;

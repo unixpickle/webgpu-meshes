@@ -121,15 +121,15 @@ fn symEigVector3(a00: f32, a01: f32, a02: f32, a11: f32, a12: f32, a22: f32, eig
   var bestScore = 0.0;
   var tried = 0u;
 
-  if (dot(row1, row1) > 1e-20) {
+  if (row1.x != 0.0 || row1.y != 0.0 || row1.z != 0.0) {
     let basis = qefOrthoBasis(row1);
     updateBestNullCandidate(row1, row2, row3, basis.b1, &bestVec, &bestScore, &tried);
   }
-  if (dot(row2, row2) > 1e-20) {
+  if (row2.x != 0.0 || row2.y != 0.0 || row2.z != 0.0) {
     let basis = qefOrthoBasis(row2);
     updateBestNullCandidate(row1, row2, row3, basis.b1, &bestVec, &bestScore, &tried);
   }
-  if (dot(row3, row3) > 1e-20) {
+  if (row3.x != 0.0 || row3.y != 0.0 || row3.z != 0.0) {
     let basis = qefOrthoBasis(row3);
     updateBestNullCandidate(row1, row2, row3, basis.b1, &bestVec, &bestScore, &tried);
   }
@@ -145,28 +145,36 @@ fn symEigVector3(a00: f32, a01: f32, a02: f32, a11: f32, a12: f32, a22: f32, eig
 }
 
 fn symEigDecomp2(a: f32, b: f32, d: f32) -> SymEig2 {
-  if (abs(b) <= 1e-20) {
-    if (a >= d) {
-      return SymEig2(vec2<f32>(a, d), vec2<f32>(1.0, 0.0), vec2<f32>(0.0, 1.0));
-    }
-    return SymEig2(vec2<f32>(d, a), vec2<f32>(0.0, 1.0), vec2<f32>(1.0, 0.0));
-  }
-
   let trace = 0.5 * (a + d);
   let diff = 0.5 * (a - d);
   let root = sqrt(max(0.0, diff * diff + b * b));
-  let lambda0 = trace + root;
-  let lambda1 = trace - root;
-
-  var v0 = vec2<f32>(b, lambda0 - a);
-  if (dot(v0, v0) <= 1e-20) {
-    v0 = vec2<f32>(lambda0 - d, b);
+  var lambda0 = trace + root;
+  var lambda1 = trace - root;
+  if (lambda0 < lambda1) {
+    let tmp = lambda0;
+    lambda0 = lambda1;
+    lambda1 = tmp;
   }
-  let v0Norm = sqrt(max(dot(v0, v0), 1e-20));
-  v0 /= v0Norm;
-  let v1 = vec2<f32>(-v0.y, v0.x);
 
-  return SymEig2(vec2<f32>(lambda0, lambda1), v0, v1);
+  let r1 = vec2<f32>(a - lambda0, b);
+  let r2 = vec2<f32>(b, d - lambda0);
+  let n1 = length(r1);
+  let n2 = length(r2);
+
+  if (n1 == 0.0 && n2 == 0.0) {
+    return SymEig2(vec2<f32>(lambda0, lambda1), vec2<f32>(1.0, 0.0), vec2<f32>(0.0, 1.0));
+  }
+
+  var secondEig = r1;
+  var secondNorm = n1;
+  if (n2 > n1) {
+    secondEig = r2;
+    secondNorm = n2;
+  }
+  secondEig /= secondNorm;
+  let firstEig = vec2<f32>(-secondEig.y, secondEig.x);
+
+  return SymEig2(vec2<f32>(lambda0, lambda1), firstEig, secondEig);
 }
 
 fn symEigDecomp3(a00: f32, a01: f32, a02: f32, a11: f32, a12: f32, a22: f32) -> SymEig3 {
@@ -181,10 +189,8 @@ fn symEigDecomp3(a00: f32, a01: f32, a02: f32, a11: f32, a12: f32, a22: f32) -> 
   let sub11 = dot(out2, basis.b2);
   let sub = symEigDecomp2(sub00, sub01, sub11);
 
-  // Match matrix3.go symEigDecomp(): the lifted 2D eigenvectors are assembled
-  // row-wise here, not column-wise as in the SVD path.
-  let v1 = basis.b1 * sub.v0.x + basis.b2 * sub.v1.x;
-  let v2 = basis.b1 * sub.v0.y + basis.b2 * sub.v1.y;
+  let v1 = basis.b1 * sub.v0.x + basis.b2 * sub.v0.y;
+  let v2 = basis.b1 * sub.v1.x + basis.b2 * sub.v1.y;
   return SymEig3(vec3<f32>(values.x, sub.values.x, sub.values.y), v0, v1, v2);
 }
 
