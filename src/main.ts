@@ -1,6 +1,6 @@
 import './styles.css';
 
-import { dualContourWebGPU, exampleSphereSolidWGSL } from './dual_contouring_webgpu';
+import { dualContourWebGPU, exampleSphereSolidWGSL } from './dual_contouring';
 import { meshToBinarySTL } from './stl';
 import type { Vec3 } from './vec3';
 
