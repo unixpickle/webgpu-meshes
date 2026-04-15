@@ -46,6 +46,7 @@ export interface DualContouringWebGPUOptions {
   triangleMode?: TriangleMode;
   bisectionSteps?: number;
   normalStep?: number;
+  bufferSize?: number;
   workgroupSize?: number;
   label?: string;
 }
@@ -61,10 +62,26 @@ interface GridInfo {
   repairEpsilonWorld: number;
 }
 
-interface DecodedGPUVertices {
-  positions: Float32Array;
-  cubeIndices: Int32Array;
-  originalFlags: Uint8Array;
+interface BatchLayout {
+  cornerRows: number;
+  cubeRows: number;
+  cornerPlaneSize: number;
+  xEdgePlaneSize: number;
+  yEdgePlaneSize: number;
+  zEdgePlaneSize: number;
+  cubePlaneSize: number;
+}
+
+interface DispatchRange {
+  localZStart: number;
+  localZCount: number;
+}
+
+interface BatchSpec {
+  cornerFill: DispatchRange;
+  cubeFill: DispatchRange;
+  xyEmit: DispatchRange;
+  zEmit: DispatchRange;
 }
 
 interface SingularEdgeGroup {
@@ -84,6 +101,13 @@ interface StageTiming {
   ms: number;
 }
 
+const DEFAULT_DUAL_CONTOUR_BUFFER_SIZE = 1_000_000;
+const STATIC_PARAMS_SIZE = 64;
+const BATCH_PARAMS_SIZE = 32;
+const HERMITE_STRIDE = 48;
+const CUBE_STRIDE = 32;
+const TRIANGLE_STRIDE = 16;
+
 export async function dualContourWebGPU(options: DualContouringWebGPUOptions): Promise<DualContourResult> {
   return dualContourWebGPUWithGPUHermite(options);
 }
@@ -100,74 +124,124 @@ async function dualContourWebGPUWithGPUHermite(options: DualContouringWebGPUOpti
 
   const config = normalizeOptions(options);
   const grid = createGridInfo(config.min, config.max, config.delta, config.noJitter, config.cubeMargin, config.repairEpsilon);
+  const layout = createBatchLayout(grid, config.bufferSize);
   markStage('normalize options + grid');
 
   const device = config.device;
   const workgroupSize = config.workgroupSize;
-
-  const cornerCount = (grid.nx + 1) * (grid.ny + 1) * (grid.nz + 1);
-  const xEdgeCount = grid.nx * (grid.ny + 1) * (grid.nz + 1);
-  const yEdgeCount = (grid.nx + 1) * grid.ny * (grid.nz + 1);
-  const zEdgeCount = (grid.nx + 1) * (grid.ny + 1) * grid.nz;
-  const cubeCount = grid.nx * grid.ny * grid.nz;
-  const triangleStride = 16;
   const deviceLimits = device.limits as Record<string, number | undefined> | undefined;
   const maxStorageBindingSize = deviceLimits?.maxStorageBufferBindingSize ?? 128 * 1024 * 1024;
   const maxBufferSize = deviceLimits?.maxBufferSize ?? Number.POSITIVE_INFINITY;
 
+  const cornerBufferSize = layout.cornerPlaneSize * layout.cornerRows * 4;
+  const xEdgeBufferSize = layout.xEdgePlaneSize * layout.cornerRows * HERMITE_STRIDE;
+  const yEdgeBufferSize = layout.yEdgePlaneSize * layout.cornerRows * HERMITE_STRIDE;
+  const zEdgeBufferSize = layout.zEdgePlaneSize * layout.cubeRows * HERMITE_STRIDE;
+  const cubeBufferSize = layout.cubePlaneSize * layout.cubeRows * CUBE_STRIDE;
+  const xCountBufferSize = layout.xEdgePlaneSize * layout.cornerRows * 4;
+  const yCountBufferSize = layout.yEdgePlaneSize * layout.cornerRows * 4;
+  const zCountBufferSize = layout.zEdgePlaneSize * layout.cubeRows * 4;
+  const cubeReadbackSize = layout.cubePlaneSize * layout.cubeRows * CUBE_STRIDE;
+
+  assertBufferFits('corner buffer', cornerBufferSize, maxStorageBindingSize, maxBufferSize, true);
+  assertBufferFits('x edge buffer', xEdgeBufferSize, maxStorageBindingSize, maxBufferSize, true);
+  assertBufferFits('y edge buffer', yEdgeBufferSize, maxStorageBindingSize, maxBufferSize, true);
+  assertBufferFits('z edge buffer', zEdgeBufferSize, maxStorageBindingSize, maxBufferSize, true);
+  assertBufferFits('cube buffer', cubeBufferSize, maxStorageBindingSize, maxBufferSize, true);
+  assertBufferFits('x triangle count buffer', xCountBufferSize, maxStorageBindingSize, maxBufferSize, true);
+  assertBufferFits('y triangle count buffer', yCountBufferSize, maxStorageBindingSize, maxBufferSize, true);
+  assertBufferFits('z triangle count buffer', zCountBufferSize, maxStorageBindingSize, maxBufferSize, true);
+  assertBufferFits('x triangle offset buffer', xCountBufferSize, maxStorageBindingSize, maxBufferSize, true);
+  assertBufferFits('y triangle offset buffer', yCountBufferSize, maxStorageBindingSize, maxBufferSize, true);
+  assertBufferFits('z triangle offset buffer', zCountBufferSize, maxStorageBindingSize, maxBufferSize, true);
+  assertBufferFits('cube readback buffer', cubeReadbackSize, undefined, maxBufferSize, false);
+  assertBufferFits('x triangle count readback buffer', xCountBufferSize, undefined, maxBufferSize, false);
+  assertBufferFits('y triangle count readback buffer', yCountBufferSize, undefined, maxBufferSize, false);
+  assertBufferFits('z triangle count readback buffer', zCountBufferSize, undefined, maxBufferSize, false);
+
   const cornerBuffer = device.createBuffer({
     label: `${config.label}-corners`,
-    size: cornerCount * 4,
+    size: cornerBufferSize,
     usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_SRC,
   });
-
-  const hermiteStride = 48;
-
   const xEdgeBuffer = device.createBuffer({
     label: `${config.label}-x-edges`,
-    size: xEdgeCount * hermiteStride,
+    size: xEdgeBufferSize,
     usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_SRC,
   });
   const yEdgeBuffer = device.createBuffer({
     label: `${config.label}-y-edges`,
-    size: yEdgeCount * hermiteStride,
+    size: yEdgeBufferSize,
     usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_SRC,
   });
   const zEdgeBuffer = device.createBuffer({
     label: `${config.label}-z-edges`,
-    size: zEdgeCount * hermiteStride,
+    size: zEdgeBufferSize,
     usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_SRC,
   });
-
-  const cubeStride = 32;
   const cubeBuffer = device.createBuffer({
     label: `${config.label}-cubes`,
-    size: cubeCount * cubeStride,
+    size: cubeBufferSize,
     usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_SRC,
   });
   const xTriangleCountBuffer = device.createBuffer({
     label: `${config.label}-x-triangle-counts`,
-    size: xEdgeCount * 4,
+    size: xCountBufferSize,
     usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_SRC,
   });
   const yTriangleCountBuffer = device.createBuffer({
     label: `${config.label}-y-triangle-counts`,
-    size: yEdgeCount * 4,
+    size: yCountBufferSize,
     usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_SRC,
   });
   const zTriangleCountBuffer = device.createBuffer({
     label: `${config.label}-z-triangle-counts`,
-    size: zEdgeCount * 4,
+    size: zCountBufferSize,
     usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_SRC,
+  });
+  const xTriangleOffsetBuffer = device.createBuffer({
+    label: `${config.label}-x-triangle-offsets`,
+    size: xCountBufferSize,
+    usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_DST,
+  });
+  const yTriangleOffsetBuffer = device.createBuffer({
+    label: `${config.label}-y-triangle-offsets`,
+    size: yCountBufferSize,
+    usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_DST,
+  });
+  const zTriangleOffsetBuffer = device.createBuffer({
+    label: `${config.label}-z-triangle-offsets`,
+    size: zCountBufferSize,
+    usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_DST,
   });
   markStage('create GPU buffers');
 
-  const uniformBuffer = device.createBuffer({
-    label: `${config.label}-params`,
-    size: 64,
+  const staticUniformBuffer = device.createBuffer({
+    label: `${config.label}-static-params`,
+    size: STATIC_PARAMS_SIZE,
     usage: GPUBufferUsageAny.UNIFORM | GPUBufferUsageAny.COPY_DST,
   });
-  device.queue.writeBuffer(uniformBuffer, 0, packUniforms(grid, config));
+  const cornerRangeBuffer = device.createBuffer({
+    label: `${config.label}-corner-range`,
+    size: BATCH_PARAMS_SIZE,
+    usage: GPUBufferUsageAny.UNIFORM | GPUBufferUsageAny.COPY_DST,
+  });
+  const cubeRangeBuffer = device.createBuffer({
+    label: `${config.label}-cube-range`,
+    size: BATCH_PARAMS_SIZE,
+    usage: GPUBufferUsageAny.UNIFORM | GPUBufferUsageAny.COPY_DST,
+  });
+  const xyEmitRangeBuffer = device.createBuffer({
+    label: `${config.label}-xy-emit-range`,
+    size: BATCH_PARAMS_SIZE,
+    usage: GPUBufferUsageAny.UNIFORM | GPUBufferUsageAny.COPY_DST,
+  });
+  const zEmitRangeBuffer = device.createBuffer({
+    label: `${config.label}-z-emit-range`,
+    size: BATCH_PARAMS_SIZE,
+    usage: GPUBufferUsageAny.UNIFORM | GPUBufferUsageAny.COPY_DST,
+  });
+  device.queue.writeBuffer(staticUniformBuffer, 0, packStaticUniforms(grid, layout, config));
 
   const shaders = buildShaderBundle(config.solidWGSL, workgroupSize);
   const cornerPipeline = device.createComputePipeline({
@@ -230,49 +304,55 @@ async function dualContourWebGPUWithGPUHermite(options: DualContouringWebGPUOpti
   const cornerBindGroup = device.createBindGroup({
     layout: cornerPipeline.getBindGroupLayout(0),
     entries: [
-      { binding: 0, resource: { buffer: uniformBuffer } },
-      { binding: 1, resource: { buffer: cornerBuffer } },
+      { binding: 0, resource: { buffer: staticUniformBuffer } },
+      { binding: 1, resource: { buffer: cornerRangeBuffer } },
+      { binding: 2, resource: { buffer: cornerBuffer } },
     ],
   });
   const xEdgeBindGroup = device.createBindGroup({
     layout: xEdgePipeline.getBindGroupLayout(0),
     entries: [
-      { binding: 0, resource: { buffer: uniformBuffer } },
-      { binding: 1, resource: { buffer: cornerBuffer } },
-      { binding: 2, resource: { buffer: xEdgeBuffer } },
+      { binding: 0, resource: { buffer: staticUniformBuffer } },
+      { binding: 1, resource: { buffer: cornerRangeBuffer } },
+      { binding: 2, resource: { buffer: cornerBuffer } },
+      { binding: 3, resource: { buffer: xEdgeBuffer } },
     ],
   });
   const yEdgeBindGroup = device.createBindGroup({
     layout: yEdgePipeline.getBindGroupLayout(0),
     entries: [
-      { binding: 0, resource: { buffer: uniformBuffer } },
-      { binding: 1, resource: { buffer: cornerBuffer } },
-      { binding: 2, resource: { buffer: yEdgeBuffer } },
+      { binding: 0, resource: { buffer: staticUniformBuffer } },
+      { binding: 1, resource: { buffer: cornerRangeBuffer } },
+      { binding: 2, resource: { buffer: cornerBuffer } },
+      { binding: 3, resource: { buffer: yEdgeBuffer } },
     ],
   });
   const zEdgeBindGroup = device.createBindGroup({
     layout: zEdgePipeline.getBindGroupLayout(0),
     entries: [
-      { binding: 0, resource: { buffer: uniformBuffer } },
-      { binding: 1, resource: { buffer: cornerBuffer } },
-      { binding: 2, resource: { buffer: zEdgeBuffer } },
+      { binding: 0, resource: { buffer: staticUniformBuffer } },
+      { binding: 1, resource: { buffer: cubeRangeBuffer } },
+      { binding: 2, resource: { buffer: cornerBuffer } },
+      { binding: 3, resource: { buffer: zEdgeBuffer } },
     ],
   });
   const cubeBindGroup = device.createBindGroup({
     layout: cubePipeline.getBindGroupLayout(0),
     entries: [
-      { binding: 0, resource: { buffer: uniformBuffer } },
-      { binding: 1, resource: { buffer: cornerBuffer } },
-      { binding: 2, resource: { buffer: xEdgeBuffer } },
-      { binding: 3, resource: { buffer: yEdgeBuffer } },
-      { binding: 4, resource: { buffer: zEdgeBuffer } },
-      { binding: 5, resource: { buffer: cubeBuffer } },
+      { binding: 0, resource: { buffer: staticUniformBuffer } },
+      { binding: 1, resource: { buffer: cubeRangeBuffer } },
+      { binding: 2, resource: { buffer: cornerBuffer } },
+      { binding: 3, resource: { buffer: xEdgeBuffer } },
+      { binding: 4, resource: { buffer: yEdgeBuffer } },
+      { binding: 5, resource: { buffer: zEdgeBuffer } },
+      { binding: 6, resource: { buffer: cubeBuffer } },
     ],
   });
   const countXBindGroup = device.createBindGroup({
     layout: countXPipeline.getBindGroupLayout(0),
     entries: [
-      { binding: 0, resource: { buffer: uniformBuffer } },
+      { binding: 0, resource: { buffer: staticUniformBuffer } },
+      { binding: 1, resource: { buffer: xyEmitRangeBuffer } },
       { binding: 2, resource: { buffer: xEdgeBuffer } },
       { binding: 3, resource: { buffer: cubeBuffer } },
       { binding: 4, resource: { buffer: xTriangleCountBuffer } },
@@ -281,7 +361,8 @@ async function dualContourWebGPUWithGPUHermite(options: DualContouringWebGPUOpti
   const countYBindGroup = device.createBindGroup({
     layout: countYPipeline.getBindGroupLayout(0),
     entries: [
-      { binding: 0, resource: { buffer: uniformBuffer } },
+      { binding: 0, resource: { buffer: staticUniformBuffer } },
+      { binding: 1, resource: { buffer: xyEmitRangeBuffer } },
       { binding: 2, resource: { buffer: yEdgeBuffer } },
       { binding: 3, resource: { buffer: cubeBuffer } },
       { binding: 4, resource: { buffer: yTriangleCountBuffer } },
@@ -290,7 +371,8 @@ async function dualContourWebGPUWithGPUHermite(options: DualContouringWebGPUOpti
   const countZBindGroup = device.createBindGroup({
     layout: countZPipeline.getBindGroupLayout(0),
     entries: [
-      { binding: 0, resource: { buffer: uniformBuffer } },
+      { binding: 0, resource: { buffer: staticUniformBuffer } },
+      { binding: 1, resource: { buffer: zEmitRangeBuffer } },
       { binding: 2, resource: { buffer: zEdgeBuffer } },
       { binding: 3, resource: { buffer: cubeBuffer } },
       { binding: 4, resource: { buffer: zTriangleCountBuffer } },
@@ -300,174 +382,208 @@ async function dualContourWebGPUWithGPUHermite(options: DualContouringWebGPUOpti
 
   const cubeReadback = device.createBuffer({
     label: `${config.label}-cube-readback`,
-    size: cubeCount * cubeStride,
+    size: cubeReadbackSize,
     usage: GPUBufferUsageAny.COPY_DST | GPUBufferUsageAny.MAP_READ,
   });
   const xTriangleCountReadback = device.createBuffer({
     label: `${config.label}-x-triangle-counts-readback`,
-    size: xEdgeCount * 4,
+    size: xCountBufferSize,
     usage: GPUBufferUsageAny.COPY_DST | GPUBufferUsageAny.MAP_READ,
   });
   const yTriangleCountReadback = device.createBuffer({
     label: `${config.label}-y-triangle-counts-readback`,
-    size: yEdgeCount * 4,
+    size: yCountBufferSize,
     usage: GPUBufferUsageAny.COPY_DST | GPUBufferUsageAny.MAP_READ,
   });
   const zTriangleCountReadback = device.createBuffer({
     label: `${config.label}-z-triangle-counts-readback`,
-    size: zEdgeCount * 4,
+    size: zCountBufferSize,
     usage: GPUBufferUsageAny.COPY_DST | GPUBufferUsageAny.MAP_READ,
   });
   markStage('create readback buffers');
 
-  const encoder = device.createCommandEncoder({ label: `${config.label}-count-encoder` });
-  {
-    const pass = encoder.beginComputePass({ label: `${config.label}-count-pass` });
+  const cpuMesh = new CPUMesh([], []);
+  const cubeVertexIds = new Map<number, number>();
+  let zOffset = 0;
+  let cornerRingHead = 0;
+  let cubeRingHead = 0;
+  let advanceIntoBatch = 0;
+  let batchIndex = 0;
 
-    dispatch1D(pass, cornerPipeline, cornerBindGroup, cornerCount, workgroupSize);
-    dispatch1D(pass, xEdgePipeline, xEdgeBindGroup, xEdgeCount, workgroupSize);
-    dispatch1D(pass, yEdgePipeline, yEdgeBindGroup, yEdgeCount, workgroupSize);
-    dispatch1D(pass, zEdgePipeline, zEdgeBindGroup, zEdgeCount, workgroupSize);
-    dispatch1D(pass, cubePipeline, cubeBindGroup, cubeCount, workgroupSize);
-    dispatch1D(pass, countXPipeline, countXBindGroup, xEdgeCount, workgroupSize);
-    dispatch1D(pass, countYPipeline, countYBindGroup, yEdgeCount, workgroupSize);
-    dispatch1D(pass, countZPipeline, countZBindGroup, zEdgeCount, workgroupSize);
+  for (;;) {
+    const remainingAfterWindow = grid.nz + 1 - (layout.cornerRows + zOffset);
+    const isFinalBatch = remainingAfterWindow === 0;
+    const batchSpec = createBatchSpec(layout, advanceIntoBatch, isFinalBatch);
+    const xEmitCount = batchSpec.xyEmit.localZCount * layout.xEdgePlaneSize;
+    const yEmitCount = batchSpec.xyEmit.localZCount * layout.yEdgePlaneSize;
+    const zEmitCount = batchSpec.zEmit.localZCount * layout.zEdgePlaneSize;
 
-    pass.end();
-  }
-  markStage('encode count pass');
+    device.queue.writeBuffer(cornerRangeBuffer, 0, packBatchUniforms(zOffset, cornerRingHead, cubeRingHead, batchSpec.cornerFill));
+    device.queue.writeBuffer(cubeRangeBuffer, 0, packBatchUniforms(zOffset, cornerRingHead, cubeRingHead, batchSpec.cubeFill));
+    device.queue.writeBuffer(xyEmitRangeBuffer, 0, packBatchUniforms(zOffset, cornerRingHead, cubeRingHead, batchSpec.xyEmit, isFinalBatch));
+    device.queue.writeBuffer(zEmitRangeBuffer, 0, packBatchUniforms(zOffset, cornerRingHead, cubeRingHead, batchSpec.zEmit, isFinalBatch));
 
-  encoder.copyBufferToBuffer(xTriangleCountBuffer, 0, xTriangleCountReadback, 0, xEdgeCount * 4);
-  encoder.copyBufferToBuffer(yTriangleCountBuffer, 0, yTriangleCountReadback, 0, yEdgeCount * 4);
-  encoder.copyBufferToBuffer(zTriangleCountBuffer, 0, zTriangleCountReadback, 0, zEdgeCount * 4);
-  device.queue.submit([encoder.finish()]);
-  await device.queue.onSubmittedWorkDone();
-  markStage('submit count pass + GPU execution');
+    const countEncoder = device.createCommandEncoder({ label: `${config.label}-count-encoder-${batchIndex}` });
+    {
+      const pass = countEncoder.beginComputePass({ label: `${config.label}-count-pass-${batchIndex}` });
+      dispatch1D(pass, cornerPipeline, cornerBindGroup, batchSpec.cornerFill.localZCount * layout.cornerPlaneSize, workgroupSize);
+      dispatch1D(pass, xEdgePipeline, xEdgeBindGroup, batchSpec.cornerFill.localZCount * layout.xEdgePlaneSize, workgroupSize);
+      dispatch1D(pass, yEdgePipeline, yEdgeBindGroup, batchSpec.cornerFill.localZCount * layout.yEdgePlaneSize, workgroupSize);
+      dispatch1D(pass, zEdgePipeline, zEdgeBindGroup, batchSpec.cubeFill.localZCount * layout.zEdgePlaneSize, workgroupSize);
+      dispatch1D(pass, cubePipeline, cubeBindGroup, batchSpec.cubeFill.localZCount * layout.cubePlaneSize, workgroupSize);
+      dispatch1D(pass, countXPipeline, countXBindGroup, xEmitCount, workgroupSize);
+      dispatch1D(pass, countYPipeline, countYBindGroup, yEmitCount, workgroupSize);
+      dispatch1D(pass, countZPipeline, countZBindGroup, zEmitCount, workgroupSize);
+      pass.end();
+    }
+    if (xEmitCount > 0) {
+      countEncoder.copyBufferToBuffer(xTriangleCountBuffer, 0, xTriangleCountReadback, 0, xEmitCount * 4);
+    }
+    if (yEmitCount > 0) {
+      countEncoder.copyBufferToBuffer(yTriangleCountBuffer, 0, yTriangleCountReadback, 0, yEmitCount * 4);
+    }
+    if (zEmitCount > 0) {
+      countEncoder.copyBufferToBuffer(zTriangleCountBuffer, 0, zTriangleCountReadback, 0, zEmitCount * 4);
+    }
+    device.queue.submit([countEncoder.finish()]);
+    await device.queue.onSubmittedWorkDone();
+    markStage(`batch ${batchIndex}: fill + count`);
 
-  const [xCountBytes, yCountBytes, zCountBytes] = await Promise.all([
-    readBuffer(xTriangleCountReadback),
-    readBuffer(yTriangleCountReadback),
-    readBuffer(zTriangleCountReadback),
-  ]);
-  markStage('GPU count readback + map');
+    const [xCountBytesRaw, yCountBytesRaw, zCountBytesRaw] = await Promise.all([
+      xEmitCount > 0 ? readBuffer(xTriangleCountReadback) : Promise.resolve(new ArrayBuffer(0)),
+      yEmitCount > 0 ? readBuffer(yTriangleCountReadback) : Promise.resolve(new ArrayBuffer(0)),
+      zEmitCount > 0 ? readBuffer(zTriangleCountReadback) : Promise.resolve(new ArrayBuffer(0)),
+    ]);
+    const xTriangleCounts = new Uint32Array(xCountBytesRaw.slice(0, xEmitCount * 4));
+    const yTriangleCounts = new Uint32Array(yCountBytesRaw.slice(0, yEmitCount * 4));
+    const zTriangleCounts = new Uint32Array(zCountBytesRaw.slice(0, zEmitCount * 4));
+    const xTriangleOffsets = exclusiveScanCounts(xTriangleCounts);
+    const yTriangleOffsets = exclusiveScanCounts(yTriangleCounts, xTriangleOffsets.totalCount);
+    const zTriangleOffsets = exclusiveScanCounts(zTriangleCounts, yTriangleOffsets.totalCount);
+    const triangleCount = zTriangleOffsets.totalCount;
+    const triangleBufferSize = Math.max(16, triangleCount * TRIANGLE_STRIDE);
+    if (triangleBufferSize > maxStorageBindingSize) {
+      throw new Error(
+        `Triangle output buffer requires ${triangleBufferSize} bytes, which exceeds the device storage-buffer binding limit of ${maxStorageBindingSize} bytes. ` +
+        `Use a larger delta / smaller bounds, or reduce bufferSize.`
+      );
+    }
+    if (triangleBufferSize > maxBufferSize) {
+      throw new Error(
+        `Triangle output buffer requires ${triangleBufferSize} bytes, which exceeds the device maxBufferSize of ${maxBufferSize} bytes. ` +
+        `Use a larger delta or smaller bounds.`
+      );
+    }
+    markStage(`batch ${batchIndex}: decode counts`);
 
-  const xTriangleCounts = new Uint32Array(xCountBytes);
-  const yTriangleCounts = new Uint32Array(yCountBytes);
-  const zTriangleCounts = new Uint32Array(zCountBytes);
-  const xTriangleOffsets = exclusiveScanCounts(xTriangleCounts);
-  const yTriangleOffsets = exclusiveScanCounts(yTriangleCounts, xTriangleOffsets.totalCount);
-  const zTriangleOffsets = exclusiveScanCounts(zTriangleCounts, yTriangleOffsets.totalCount);
-  const triangleCount = zTriangleOffsets.totalCount;
-  const triangleBufferSize = Math.max(16, triangleCount * triangleStride);
-  if (triangleBufferSize > maxStorageBindingSize) {
-    throw new Error(
-      `Triangle output buffer requires ${triangleBufferSize} bytes, which exceeds the device storage-buffer binding limit of ${maxStorageBindingSize} bytes. ` +
-      `Use a larger delta / smaller bounds, or request a device with a higher maxStorageBufferBindingSize.`
+    if (xTriangleOffsets.offsets.byteLength > 0) {
+      device.queue.writeBuffer(xTriangleOffsetBuffer, 0, xTriangleOffsets.offsets);
+    }
+    if (yTriangleOffsets.offsets.byteLength > 0) {
+      device.queue.writeBuffer(yTriangleOffsetBuffer, 0, yTriangleOffsets.offsets);
+    }
+    if (zTriangleOffsets.offsets.byteLength > 0) {
+      device.queue.writeBuffer(zTriangleOffsetBuffer, 0, zTriangleOffsets.offsets);
+    }
+
+    const triangleBuffer = device.createBuffer({
+      label: `${config.label}-triangles-${batchIndex}`,
+      size: triangleBufferSize,
+      usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_SRC,
+    });
+    const triangleReadback = device.createBuffer({
+      label: `${config.label}-triangle-readback-${batchIndex}`,
+      size: triangleBufferSize,
+      usage: GPUBufferUsageAny.COPY_DST | GPUBufferUsageAny.MAP_READ,
+    });
+    const emitXBindGroup = device.createBindGroup({
+      layout: emitXPipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: staticUniformBuffer } },
+        { binding: 1, resource: { buffer: xyEmitRangeBuffer } },
+        { binding: 2, resource: { buffer: cornerBuffer } },
+        { binding: 3, resource: { buffer: xEdgeBuffer } },
+        { binding: 4, resource: { buffer: cubeBuffer } },
+        { binding: 5, resource: { buffer: xTriangleOffsetBuffer } },
+        { binding: 6, resource: { buffer: triangleBuffer } },
+      ],
+    });
+    const emitYBindGroup = device.createBindGroup({
+      layout: emitYPipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: staticUniformBuffer } },
+        { binding: 1, resource: { buffer: xyEmitRangeBuffer } },
+        { binding: 2, resource: { buffer: cornerBuffer } },
+        { binding: 3, resource: { buffer: yEdgeBuffer } },
+        { binding: 4, resource: { buffer: cubeBuffer } },
+        { binding: 5, resource: { buffer: yTriangleOffsetBuffer } },
+        { binding: 6, resource: { buffer: triangleBuffer } },
+      ],
+    });
+    const emitZBindGroup = device.createBindGroup({
+      layout: emitZPipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: staticUniformBuffer } },
+        { binding: 1, resource: { buffer: zEmitRangeBuffer } },
+        { binding: 2, resource: { buffer: cornerBuffer } },
+        { binding: 3, resource: { buffer: zEdgeBuffer } },
+        { binding: 4, resource: { buffer: cubeBuffer } },
+        { binding: 5, resource: { buffer: zTriangleOffsetBuffer } },
+        { binding: 6, resource: { buffer: triangleBuffer } },
+      ],
+    });
+
+    const emitEncoder = device.createCommandEncoder({ label: `${config.label}-emit-encoder-${batchIndex}` });
+    {
+      const pass = emitEncoder.beginComputePass({ label: `${config.label}-emit-pass-${batchIndex}` });
+      dispatch1D(pass, emitXPipeline, emitXBindGroup, xEmitCount, workgroupSize);
+      dispatch1D(pass, emitYPipeline, emitYBindGroup, yEmitCount, workgroupSize);
+      dispatch1D(pass, emitZPipeline, emitZBindGroup, zEmitCount, workgroupSize);
+      pass.end();
+    }
+    copyLogicalCubeRowsToReadback(
+      emitEncoder,
+      cubeBuffer,
+      cubeReadback,
+      layout,
+      cubeRingHead,
+      batchSpec.cubeFill.localZStart,
+      batchSpec.cubeFill.localZCount,
     );
-  }
-  if (triangleBufferSize > maxBufferSize) {
-    throw new Error(
-      `Triangle output buffer requires ${triangleBufferSize} bytes, which exceeds the device maxBufferSize of ${maxBufferSize} bytes. ` +
-      `Use a larger delta or smaller bounds.`
+    emitEncoder.copyBufferToBuffer(triangleBuffer, 0, triangleReadback, 0, triangleBufferSize);
+    device.queue.submit([emitEncoder.finish()]);
+    await device.queue.onSubmittedWorkDone();
+    markStage(`batch ${batchIndex}: emit`);
+
+    const [cubeBytesRaw, triangleBytesRaw] = await Promise.all([
+      batchSpec.cubeFill.localZCount > 0 ? readBuffer(cubeReadback) : Promise.resolve(new ArrayBuffer(0)),
+      readBuffer(triangleReadback),
+    ]);
+    const cubeBytes = cubeBytesRaw.slice(0, batchSpec.cubeFill.localZCount * layout.cubePlaneSize * CUBE_STRIDE);
+    const triangleBytes = triangleBytesRaw.slice(0, triangleCount * TRIANGLE_STRIDE);
+    appendBatchCubeVertices(
+      cpuMesh,
+      cubeVertexIds,
+      cubeBytes,
+      grid,
+      zOffset + batchSpec.cubeFill.localZStart,
+      batchSpec.cubeFill.localZCount,
     );
+    appendBatchTriangles(cpuMesh, cubeVertexIds, decodeTriangles(triangleBytes, triangleCount), triangleCount);
+    triangleBuffer.destroy();
+    triangleReadback.destroy();
+    markStage(`batch ${batchIndex}: CPU mesh assembly`);
+
+    if (remainingAfterWindow === 0) {
+      break;
+    }
+    advanceIntoBatch = Math.min(remainingAfterWindow, layout.cornerRows - 2);
+    zOffset += advanceIntoBatch;
+    cornerRingHead = (cornerRingHead + advanceIntoBatch) % layout.cornerRows;
+    cubeRingHead = (cubeRingHead + advanceIntoBatch) % layout.cubeRows;
+    batchIndex++;
   }
-  markStage('decode counts + prefix sums');
 
-  const xTriangleOffsetBuffer = device.createBuffer({
-    label: `${config.label}-x-triangle-offsets`,
-    size: xEdgeCount * 4,
-    usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_DST,
-  });
-  const yTriangleOffsetBuffer = device.createBuffer({
-    label: `${config.label}-y-triangle-offsets`,
-    size: yEdgeCount * 4,
-    usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_DST,
-  });
-  const zTriangleOffsetBuffer = device.createBuffer({
-    label: `${config.label}-z-triangle-offsets`,
-    size: zEdgeCount * 4,
-    usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_DST,
-  });
-  const triangleBuffer = device.createBuffer({
-    label: `${config.label}-triangles`,
-    size: triangleBufferSize,
-    usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_SRC,
-  });
-  const triangleReadback = device.createBuffer({
-    label: `${config.label}-triangle-readback`,
-    size: triangleBufferSize,
-    usage: GPUBufferUsageAny.COPY_DST | GPUBufferUsageAny.MAP_READ,
-  });
-  markStage('create exact emit buffers');
-
-  device.queue.writeBuffer(xTriangleOffsetBuffer, 0, xTriangleOffsets.offsets);
-  device.queue.writeBuffer(yTriangleOffsetBuffer, 0, yTriangleOffsets.offsets);
-  device.queue.writeBuffer(zTriangleOffsetBuffer, 0, zTriangleOffsets.offsets);
-  markStage('upload triangle offsets');
-
-  const emitXBindGroup = device.createBindGroup({
-    layout: emitXPipeline.getBindGroupLayout(0),
-    entries: [
-      { binding: 0, resource: { buffer: uniformBuffer } },
-      { binding: 1, resource: { buffer: cornerBuffer } },
-      { binding: 2, resource: { buffer: xEdgeBuffer } },
-      { binding: 3, resource: { buffer: cubeBuffer } },
-      { binding: 4, resource: { buffer: xTriangleOffsetBuffer } },
-      { binding: 5, resource: { buffer: triangleBuffer } },
-    ],
-  });
-  const emitYBindGroup = device.createBindGroup({
-    layout: emitYPipeline.getBindGroupLayout(0),
-    entries: [
-      { binding: 0, resource: { buffer: uniformBuffer } },
-      { binding: 1, resource: { buffer: cornerBuffer } },
-      { binding: 2, resource: { buffer: yEdgeBuffer } },
-      { binding: 3, resource: { buffer: cubeBuffer } },
-      { binding: 4, resource: { buffer: yTriangleOffsetBuffer } },
-      { binding: 5, resource: { buffer: triangleBuffer } },
-    ],
-  });
-  const emitZBindGroup = device.createBindGroup({
-    layout: emitZPipeline.getBindGroupLayout(0),
-    entries: [
-      { binding: 0, resource: { buffer: uniformBuffer } },
-      { binding: 1, resource: { buffer: cornerBuffer } },
-      { binding: 2, resource: { buffer: zEdgeBuffer } },
-      { binding: 3, resource: { buffer: cubeBuffer } },
-      { binding: 4, resource: { buffer: zTriangleOffsetBuffer } },
-      { binding: 5, resource: { buffer: triangleBuffer } },
-    ],
-  });
-  markStage('create emit bind groups');
-
-  const emitEncoder = device.createCommandEncoder({ label: `${config.label}-emit-encoder` });
-  {
-    const pass = emitEncoder.beginComputePass({ label: `${config.label}-emit-pass` });
-    dispatch1D(pass, emitXPipeline, emitXBindGroup, xEdgeCount, workgroupSize);
-    dispatch1D(pass, emitYPipeline, emitYBindGroup, yEdgeCount, workgroupSize);
-    dispatch1D(pass, emitZPipeline, emitZBindGroup, zEdgeCount, workgroupSize);
-    pass.end();
-  }
-  markStage('encode emit pass');
-
-  emitEncoder.copyBufferToBuffer(cubeBuffer, 0, cubeReadback, 0, cubeCount * cubeStride);
-  emitEncoder.copyBufferToBuffer(triangleBuffer, 0, triangleReadback, 0, triangleBufferSize);
-  device.queue.submit([emitEncoder.finish()]);
-  await device.queue.onSubmittedWorkDone();
-  markStage('submit emit pass + GPU execution');
-
-  const [cubeBytes, triangleBytes] = await Promise.all([
-    readBuffer(cubeReadback),
-    readBuffer(triangleReadback),
-  ]);
-  markStage('GPU emit readback + map');
-
-  const vertices = decodeCubeVertices(cubeBytes);
-  const triangleIndices = decodeTriangles(triangleBytes, triangleCount);
-  markStage('decode emitted mesh');
-
-  const cpuMesh = buildMeshFromGPUOutput(vertices, triangleIndices, triangleCount);
-  markStage('CPU mesh assembly');
   const initial = cpuMesh.compact();
   markStage('compact initial mesh');
 
@@ -506,6 +622,7 @@ function normalizeOptions(options: DualContouringWebGPUOptions): Required<Omit<D
     triangleMode: options.triangleMode ?? 'max-min-area',
     bisectionSteps: options.bisectionSteps ?? 32,
     normalStep: options.normalStep ?? 1e-4,
+    bufferSize: options.bufferSize ?? DEFAULT_DUAL_CONTOUR_BUFFER_SIZE,
     workgroupSize: options.workgroupSize ?? 256,
     label: options.label ?? 'dual-contour-webgpu',
   };
@@ -533,8 +650,48 @@ function createGridInfo(min: Vec3, max: Vec3, delta: number, noJitter: boolean, 
   };
 }
 
-function packUniforms(grid: GridInfo, options: ReturnType<typeof normalizeOptions>): ArrayBuffer {
-  const buffer = new ArrayBuffer(64);
+function createBatchLayout(grid: GridInfo, bufferSize: number): BatchLayout {
+  const cornerPlaneSize = (grid.nx + 1) * (grid.ny + 1);
+  const totalCornerRows = grid.nz + 1;
+  const cornerRows = Math.min(Math.max(Math.floor(bufferSize / cornerPlaneSize), 4), totalCornerRows);
+  return {
+    cornerRows,
+    cubeRows: cornerRows - 1,
+    cornerPlaneSize,
+    xEdgePlaneSize: grid.nx * (grid.ny + 1),
+    yEdgePlaneSize: (grid.nx + 1) * grid.ny,
+    zEdgePlaneSize: (grid.nx + 1) * (grid.ny + 1),
+    cubePlaneSize: grid.nx * grid.ny,
+  };
+}
+
+function createBatchSpec(layout: BatchLayout, advanceIntoBatch: number, isFinalBatch: boolean): BatchSpec {
+  const cornerFill = advanceIntoBatch === 0
+    ? { localZStart: 0, localZCount: layout.cornerRows }
+    : { localZStart: layout.cornerRows - advanceIntoBatch, localZCount: advanceIntoBatch };
+  const cubeFill = advanceIntoBatch === 0
+    ? { localZStart: 0, localZCount: layout.cubeRows }
+    : { localZStart: layout.cubeRows - advanceIntoBatch, localZCount: advanceIntoBatch };
+  const xyEmitStart = advanceIntoBatch === 0 ? 0 : layout.cornerRows - advanceIntoBatch - 1;
+  const xyEmitEnd = isFinalBatch ? layout.cornerRows : layout.cornerRows - 1;
+  const zEmitStart = advanceIntoBatch === 0 ? 0 : layout.cubeRows - advanceIntoBatch;
+  const zEmitCount = advanceIntoBatch === 0 ? layout.cubeRows : advanceIntoBatch;
+  return {
+    cornerFill,
+    cubeFill,
+    xyEmit: {
+      localZStart: xyEmitStart,
+      localZCount: Math.max(0, xyEmitEnd - xyEmitStart),
+    },
+    zEmit: {
+      localZStart: zEmitStart,
+      localZCount: zEmitCount,
+    },
+  };
+}
+
+function packStaticUniforms(grid: GridInfo, layout: BatchLayout, options: ReturnType<typeof normalizeOptions>): ArrayBuffer {
+  const buffer = new ArrayBuffer(STATIC_PARAMS_SIZE);
   const f32 = new Float32Array(buffer);
   const u32 = new Uint32Array(buffer);
 
@@ -552,8 +709,26 @@ function packUniforms(grid: GridInfo, options: ReturnType<typeof normalizeOption
   u32[11] = options.bisectionSteps;
   u32[12] = options.clip ? 1 : 0;
   u32[13] = triangleModeToInt(options.triangleMode);
-  u32[14] = 0;
-  u32[15] = 0;
+  u32[14] = layout.cornerRows;
+  u32[15] = layout.cubeRows;
+  return buffer;
+}
+
+function packBatchUniforms(
+  zOffset: number,
+  cornerRingHead: number,
+  cubeRingHead: number,
+  range: DispatchRange,
+  isFinalBatch = false,
+): ArrayBuffer {
+  const buffer = new ArrayBuffer(BATCH_PARAMS_SIZE);
+  const u32 = new Uint32Array(buffer);
+  u32[0] = zOffset;
+  u32[1] = cornerRingHead;
+  u32[2] = cubeRingHead;
+  u32[3] = range.localZStart;
+  u32[4] = range.localZCount;
+  u32[5] = isFinalBatch ? 1 : 0;
   return buffer;
 }
 
@@ -580,35 +755,83 @@ async function readBuffer(buffer: any): Promise<ArrayBuffer> {
   return out;
 }
 
-function buildMeshFromGPUOutput(vertices: DecodedGPUVertices, triangleIndices: Int32Array, triangleCount: number): CPUMesh {
-  return CPUMesh.fromTypedArrays(
-    vertices.positions,
-    vertices.cubeIndices,
-    vertices.originalFlags,
-    triangleIndices,
-    triangleCount,
-  );
+function assertBufferFits(
+  label: string,
+  size: number,
+  maxStorageBindingSize: number | undefined,
+  maxBufferSize: number,
+  isStorage: boolean,
+): void {
+  if (isStorage && maxStorageBindingSize !== undefined && size > maxStorageBindingSize) {
+    throw new Error(`${label} requires ${size} bytes, which exceeds the device storage-buffer binding limit of ${maxStorageBindingSize} bytes.`);
+  }
+  if (size > maxBufferSize) {
+    throw new Error(`${label} requires ${size} bytes, which exceeds the device maxBufferSize of ${maxBufferSize} bytes.`);
+  }
 }
 
-function decodeCubeVertices(bytes: ArrayBuffer): DecodedGPUVertices {
+function copyLogicalCubeRowsToReadback(
+  encoder: any,
+  cubeBuffer: any,
+  cubeReadback: any,
+  layout: BatchLayout,
+  ringHead: number,
+  localZStart: number,
+  localZCount: number,
+): void {
+  if (localZCount <= 0) return;
+  let remaining = localZCount;
+  let currentLocalZ = localZStart;
+  let dstOffset = 0;
+  const rowBytes = layout.cubePlaneSize * CUBE_STRIDE;
+  while (remaining > 0) {
+    const physicalRow = (ringHead + currentLocalZ) % layout.cubeRows;
+    const segmentRows = Math.min(remaining, layout.cubeRows - physicalRow);
+    encoder.copyBufferToBuffer(
+      cubeBuffer,
+      physicalRow * rowBytes,
+      cubeReadback,
+      dstOffset,
+      segmentRows * rowBytes,
+    );
+    currentLocalZ += segmentRows;
+    remaining -= segmentRows;
+    dstOffset += segmentRows * rowBytes;
+  }
+}
+
+function appendBatchCubeVertices(
+  mesh: CPUMesh,
+  cubeVertexIds: Map<number, number>,
+  bytes: ArrayBuffer,
+  grid: GridInfo,
+  globalZStart: number,
+  rowCount: number,
+): void {
+  if (rowCount <= 0) return;
   const view = new DataView(bytes);
-  const count = Math.floor(bytes.byteLength / 32);
-  const positions = new Float32Array(count * 3);
-  const cubeIndices = new Int32Array(count);
-  const originalFlags = new Uint8Array(count);
-  cubeIndices.fill(-1);
-  for (let i = 0; i < count; i++) {
-    const base = i * 32;
-    if (view.getUint32(base + 0, true) !== 0) {
-      const dst = i * 3;
-      positions[dst] = view.getFloat32(base + 16, true);
-      positions[dst + 1] = view.getFloat32(base + 20, true);
-      positions[dst + 2] = view.getFloat32(base + 24, true);
-      cubeIndices[i] = i;
-      originalFlags[i] = 1;
+  for (let localZ = 0; localZ < rowCount; localZ++) {
+    const globalZ = globalZStart + localZ;
+    for (let iy = 0; iy < grid.ny; iy++) {
+      for (let ix = 0; ix < grid.nx; ix++) {
+        const localIndex = ix + grid.nx * (iy + grid.ny * localZ);
+        const base = localIndex * CUBE_STRIDE;
+        if (view.getUint32(base + 0, true) === 0) continue;
+        const cubeIndex = ix + grid.nx * (iy + grid.ny * globalZ);
+        if (cubeVertexIds.has(cubeIndex)) continue;
+        const vertexId = mesh.addVertex({
+          position: [
+            view.getFloat32(base + 16, true),
+            view.getFloat32(base + 20, true),
+            view.getFloat32(base + 24, true),
+          ],
+          cubeIndex,
+          original: true,
+        });
+        cubeVertexIds.set(cubeIndex, vertexId);
+      }
     }
   }
-  return { positions, cubeIndices, originalFlags };
 }
 
 function decodeTriangles(bytes: ArrayBuffer, count: number): Int32Array {
@@ -623,6 +846,22 @@ function decodeTriangles(bytes: ArrayBuffer, count: number): Int32Array {
     result[dst + 2] = view.getUint32(base + 8, true);
   }
   return result;
+}
+
+function appendBatchTriangles(mesh: CPUMesh, cubeVertexIds: Map<number, number>, triangleIndices: Int32Array, triangleCount: number): void {
+  for (let i = 0; i < triangleCount; i++) {
+    const base = i * 3;
+    const aCube = triangleIndices[base];
+    const bCube = triangleIndices[base + 1];
+    const cCube = triangleIndices[base + 2];
+    const a = cubeVertexIds.get(aCube);
+    const b = cubeVertexIds.get(bCube);
+    const c = cubeVertexIds.get(cCube);
+    if (a === undefined || b === undefined || c === undefined) {
+      throw new Error('appendBatchTriangles(): missing cube vertex for emitted triangle');
+    }
+    mesh.addTriangle({ a, b, c });
+  }
 }
 
 function exclusiveScanCounts(counts: Uint32Array, baseOffset = 0): { offsets: Uint32Array; totalCount: number } {
@@ -1228,6 +1467,17 @@ struct DCParams {
   bisectionSteps: u32,
   clip: u32,
   triangleMode: u32,
+  cornerRows: u32,
+  cubeRows: u32,
+};
+
+struct BatchParams {
+  zOffset: u32,
+  cornerRingHead: u32,
+  cubeRingHead: u32,
+  localZStart: u32,
+  localZCount: u32,
+  isFinalBatch: u32,
   _pad0: u32,
   _pad1: u32,
 };
@@ -1257,41 +1507,58 @@ struct TriangleIndex {
 };
 
 @group(0) @binding(0) var<uniform> params: DCParams;
+@group(0) @binding(1) var<uniform> batch: BatchParams;
 
 ${solidWGSL}
 
-fn cornerIndex(ix: u32, iy: u32, iz: u32) -> u32 {
+fn cornerSlot(localZ: u32) -> u32 {
+  return (batch.cornerRingHead + localZ) % params.cornerRows;
+}
+
+fn cubeSlot(localZ: u32) -> u32 {
+  return (batch.cubeRingHead + localZ) % params.cubeRows;
+}
+
+fn globalCornerZ(localZ: u32) -> u32 {
+  return batch.zOffset + localZ;
+}
+
+fn cornerIndexLocal(ix: u32, iy: u32, localZ: u32) -> u32 {
   let sx = params.nx + 1u;
   let sy = params.ny + 1u;
-  return ix + sx * (iy + sy * iz);
+  return ix + sx * (iy + sy * cornerSlot(localZ));
 }
 
-fn cubeIndex(ix: u32, iy: u32, iz: u32) -> u32 {
-  return ix + params.nx * (iy + params.ny * iz);
+fn cubeBufferIndex(ix: u32, iy: u32, localZ: u32) -> u32 {
+  return ix + params.nx * (iy + params.ny * cubeSlot(localZ));
 }
 
-fn xEdgeIndex(ix: u32, iy: u32, iz: u32) -> u32 {
-  return ix + params.nx * (iy + (params.ny + 1u) * iz);
+fn cubeGlobalIndex(ix: u32, iy: u32, localZ: u32) -> u32 {
+  return ix + params.nx * (iy + params.ny * globalCornerZ(localZ));
 }
 
-fn yEdgeIndex(ix: u32, iy: u32, iz: u32) -> u32 {
-  return ix + (params.nx + 1u) * (iy + params.ny * iz);
+fn xEdgeIndexLocal(ix: u32, iy: u32, localZ: u32) -> u32 {
+  return ix + params.nx * (iy + (params.ny + 1u) * cornerSlot(localZ));
 }
 
-fn zEdgeIndex(ix: u32, iy: u32, iz: u32) -> u32 {
-  return ix + (params.nx + 1u) * (iy + (params.ny + 1u) * iz);
+fn yEdgeIndexLocal(ix: u32, iy: u32, localZ: u32) -> u32 {
+  return ix + (params.nx + 1u) * (iy + params.ny * cornerSlot(localZ));
 }
 
-fn cornerPosition(ix: u32, iy: u32, iz: u32) -> vec3<f32> {
-  return params.minCorner + vec3<f32>(f32(ix), f32(iy), f32(iz)) * params.delta;
+fn zEdgeIndexLocal(ix: u32, iy: u32, localZ: u32) -> u32 {
+  return ix + (params.nx + 1u) * (iy + (params.ny + 1u) * cubeSlot(localZ));
 }
 
-fn cubeMin(ix: u32, iy: u32, iz: u32) -> vec3<f32> {
-  return cornerPosition(ix, iy, iz);
+fn cornerPositionLocal(ix: u32, iy: u32, localZ: u32) -> vec3<f32> {
+  return params.minCorner + vec3<f32>(f32(ix), f32(iy), f32(globalCornerZ(localZ))) * params.delta;
 }
 
-fn cubeMax(ix: u32, iy: u32, iz: u32) -> vec3<f32> {
-  return cornerPosition(ix + 1u, iy + 1u, iz + 1u);
+fn cubeMinLocal(ix: u32, iy: u32, localZ: u32) -> vec3<f32> {
+  return cornerPositionLocal(ix, iy, localZ);
+}
+
+fn cubeMaxLocal(ix: u32, iy: u32, localZ: u32) -> vec3<f32> {
+  return cornerPositionLocal(ix + 1u, iy + 1u, localZ + 1u);
 }
 
 ${surfaceHelpers}
@@ -1330,21 +1597,20 @@ fn chooseFirstDiagonal(v0: vec3<f32>, v1: vec3<f32>, v2: vec3<f32>, v3: vec3<f32
 function buildCornerShader(solidWGSL: string, workgroupSize: number): string {
   return /* wgsl */`
 ${wgslHeader(solidWGSL)}
-@group(0) @binding(1) var<storage, read_write> corners: array<u32>;
+@group(0) @binding(2) var<storage, read_write> corners: array<u32>;
 
 @compute @workgroup_size(${workgroupSize})
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
   let sx = params.nx + 1u;
   let sy = params.ny + 1u;
-  let sz = params.nz + 1u;
-  let total = sx * sy * sz;
+  let total = sx * sy * batch.localZCount;
   if (i >= total) { return; }
   let ix = i % sx;
   let t = i / sx;
   let iy = t % sy;
-  let iz = t / sy;
-  corners[i] = select(0u, 1u, solidOccupancy(cornerPosition(ix, iy, iz)));
+  let localZ = batch.localZStart + t / sy;
+  corners[cornerIndexLocal(ix, iy, localZ)] = select(0u, 1u, solidOccupancy(cornerPositionLocal(ix, iy, localZ)));
 }
 `;
 }
@@ -1352,47 +1618,50 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 function buildEdgeShader(solidWGSL: string, workgroupSize: number, axis: 'x' | 'y' | 'z'): string {
   const decode = axis === 'x'
     ? `
-  let total = params.nx * (params.ny + 1u) * (params.nz + 1u);
+  let total = params.nx * (params.ny + 1u) * batch.localZCount;
   if (i >= total) { return; }
   let ix = i % params.nx;
   let t = i / params.nx;
   let iy = t % (params.ny + 1u);
-  let iz = t / (params.ny + 1u);
-  let c0 = cornerIndex(ix, iy, iz);
-  let c1 = cornerIndex(ix + 1u, iy, iz);
-  let p0 = cornerPosition(ix, iy, iz);
-  let p1 = cornerPosition(ix + 1u, iy, iz);
+  let localZ = batch.localZStart + t / (params.ny + 1u);
+  let c0 = cornerIndexLocal(ix, iy, localZ);
+  let c1 = cornerIndexLocal(ix + 1u, iy, localZ);
+  let p0 = cornerPositionLocal(ix, iy, localZ);
+  let p1 = cornerPositionLocal(ix + 1u, iy, localZ);
+  let edgeIndex = xEdgeIndexLocal(ix, iy, localZ);
 `
     : axis === 'y'
       ? `
-  let total = (params.nx + 1u) * params.ny * (params.nz + 1u);
+  let total = (params.nx + 1u) * params.ny * batch.localZCount;
   if (i >= total) { return; }
   let ix = i % (params.nx + 1u);
   let t = i / (params.nx + 1u);
   let iy = t % params.ny;
-  let iz = t / params.ny;
-  let c0 = cornerIndex(ix, iy, iz);
-  let c1 = cornerIndex(ix, iy + 1u, iz);
-  let p0 = cornerPosition(ix, iy, iz);
-  let p1 = cornerPosition(ix, iy + 1u, iz);
+  let localZ = batch.localZStart + t / params.ny;
+  let c0 = cornerIndexLocal(ix, iy, localZ);
+  let c1 = cornerIndexLocal(ix, iy + 1u, localZ);
+  let p0 = cornerPositionLocal(ix, iy, localZ);
+  let p1 = cornerPositionLocal(ix, iy + 1u, localZ);
+  let edgeIndex = yEdgeIndexLocal(ix, iy, localZ);
 `
       : `
-  let total = (params.nx + 1u) * (params.ny + 1u) * params.nz;
+  let total = (params.nx + 1u) * (params.ny + 1u) * batch.localZCount;
   if (i >= total) { return; }
   let ix = i % (params.nx + 1u);
   let t = i / (params.nx + 1u);
   let iy = t % (params.ny + 1u);
-  let iz = t / (params.ny + 1u);
-  let c0 = cornerIndex(ix, iy, iz);
-  let c1 = cornerIndex(ix, iy, iz + 1u);
-  let p0 = cornerPosition(ix, iy, iz);
-  let p1 = cornerPosition(ix, iy, iz + 1u);
+  let localZ = batch.localZStart + t / (params.ny + 1u);
+  let c0 = cornerIndexLocal(ix, iy, localZ);
+  let c1 = cornerIndexLocal(ix, iy, localZ + 1u);
+  let p0 = cornerPositionLocal(ix, iy, localZ);
+  let p1 = cornerPositionLocal(ix, iy, localZ + 1u);
+  let edgeIndex = zEdgeIndexLocal(ix, iy, localZ);
 `;
 
   return /* wgsl */`
 ${wgslHeader(solidWGSL)}
-@group(0) @binding(1) var<storage, read> corners: array<u32>;
-@group(0) @binding(2) var<storage, read_write> edges: array<HermiteEdge>;
+@group(0) @binding(2) var<storage, read> corners: array<u32>;
+@group(0) @binding(3) var<storage, read_write> edges: array<HermiteEdge>;
 
 @compute @workgroup_size(${workgroupSize})
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -1401,15 +1670,15 @@ ${decode}
   let occ0 = corners[c0] != 0u;
   let occ1 = corners[c1] != 0u;
   if (occ0 == occ1) {
-    edges[i].isActive = 0u;
-    edges[i].pos = vec4<f32>(0.0);
-    edges[i].normal = vec4<f32>(0.0);
+    edges[edgeIndex].isActive = 0u;
+    edges[edgeIndex].pos = vec4<f32>(0.0);
+    edges[edgeIndex].normal = vec4<f32>(0.0);
     return;
   }
   let hit = bisectOccupancyEdge(p0, p1, occ0);
-  edges[i].isActive = 1u;
-  edges[i].pos = vec4<f32>(hit, 1.0);
-  edges[i].normal = vec4<f32>(estimateNormal(hit), 0.0);
+  edges[edgeIndex].isActive = 1u;
+  edges[edgeIndex].pos = vec4<f32>(hit, 1.0);
+  edges[edgeIndex].normal = vec4<f32>(estimateNormal(hit), 0.0);
 }
 `;
 }
@@ -1417,20 +1686,20 @@ ${decode}
 function buildCubeShader(solidWGSL: string, workgroupSize: number): string {
   return /* wgsl */`
 ${wgslHeader(solidWGSL)}
-@group(0) @binding(1) var<storage, read> corners: array<u32>;
-@group(0) @binding(2) var<storage, read> xEdges: array<HermiteEdge>;
-@group(0) @binding(3) var<storage, read> yEdges: array<HermiteEdge>;
-@group(0) @binding(4) var<storage, read> zEdges: array<HermiteEdge>;
-@group(0) @binding(5) var<storage, read_write> cubes: array<CubeVertex>;
+@group(0) @binding(2) var<storage, read> corners: array<u32>;
+@group(0) @binding(3) var<storage, read> xEdges: array<HermiteEdge>;
+@group(0) @binding(4) var<storage, read> yEdges: array<HermiteEdge>;
+@group(0) @binding(5) var<storage, read> zEdges: array<HermiteEdge>;
+@group(0) @binding(6) var<storage, read_write> cubes: array<CubeVertex>;
 
-fn cubeCornerValue(ix: u32, iy: u32, iz: u32, dx: u32, dy: u32, dz: u32) -> bool {
-  return corners[cornerIndex(ix + dx, iy + dy, iz + dz)] != 0u;
+fn cubeCornerValue(ix: u32, iy: u32, localZ: u32, dx: u32, dy: u32, dz: u32) -> bool {
+  return corners[cornerIndexLocal(ix + dx, iy + dy, localZ + dz)] != 0u;
 }
 
-fn clipToCube(p: vec3<f32>, ix: u32, iy: u32, iz: u32) -> vec3<f32> {
+fn clipToCube(p: vec3<f32>, ix: u32, iy: u32, localZ: u32) -> vec3<f32> {
   let margin = params.cubeMargin;
-  let lo = cubeMin(ix, iy, iz) + vec3<f32>(margin);
-  let hi = cubeMax(ix, iy, iz) - vec3<f32>(margin);
+  let lo = cubeMinLocal(ix, iy, localZ) + vec3<f32>(margin);
+  let hi = cubeMaxLocal(ix, iy, localZ) - vec3<f32>(margin);
   return clamp(p, lo, hi);
 }
 
@@ -1450,45 +1719,46 @@ fn accumulateHermite(edge: HermiteEdge, mp: vec3<f32>, a00_: ptr<function, f32>,
 @compute @workgroup_size(${workgroupSize})
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
-  let total = params.nx * params.ny * params.nz;
+  let total = params.nx * params.ny * batch.localZCount;
   if (i >= total) { return; }
 
   let ix = i % params.nx;
   let t = i / params.nx;
   let iy = t % params.ny;
-  let iz = t / params.ny;
+  let localZ = batch.localZStart + t / params.ny;
+  let cubeIndex = cubeBufferIndex(ix, iy, localZ);
 
-  let c000 = cubeCornerValue(ix, iy, iz, 0u, 0u, 0u);
-  let c100 = cubeCornerValue(ix, iy, iz, 1u, 0u, 0u);
-  let c010 = cubeCornerValue(ix, iy, iz, 0u, 1u, 0u);
-  let c110 = cubeCornerValue(ix, iy, iz, 1u, 1u, 0u);
-  let c001 = cubeCornerValue(ix, iy, iz, 0u, 0u, 1u);
-  let c101 = cubeCornerValue(ix, iy, iz, 1u, 0u, 1u);
-  let c011 = cubeCornerValue(ix, iy, iz, 0u, 1u, 1u);
-  let c111 = cubeCornerValue(ix, iy, iz, 1u, 1u, 1u);
+  let c000 = cubeCornerValue(ix, iy, localZ, 0u, 0u, 0u);
+  let c100 = cubeCornerValue(ix, iy, localZ, 1u, 0u, 0u);
+  let c010 = cubeCornerValue(ix, iy, localZ, 0u, 1u, 0u);
+  let c110 = cubeCornerValue(ix, iy, localZ, 1u, 1u, 0u);
+  let c001 = cubeCornerValue(ix, iy, localZ, 0u, 0u, 1u);
+  let c101 = cubeCornerValue(ix, iy, localZ, 1u, 0u, 1u);
+  let c011 = cubeCornerValue(ix, iy, localZ, 0u, 1u, 1u);
+  let c111 = cubeCornerValue(ix, iy, localZ, 1u, 1u, 1u);
 
   let firstValue = c000;
   let activeCube =
     (c100 != firstValue) || (c010 != firstValue) || (c110 != firstValue) ||
     (c001 != firstValue) || (c101 != firstValue) || (c011 != firstValue) || (c111 != firstValue);
   if (!activeCube) {
-    cubes[i].isActive = 0u;
-    cubes[i].pos = vec4<f32>(0.0);
+    cubes[cubeIndex].isActive = 0u;
+    cubes[cubeIndex].pos = vec4<f32>(0.0);
     return;
   }
 
-  let e0 = xEdges[xEdgeIndex(ix, iy, iz)];
-  let e1 = yEdges[yEdgeIndex(ix, iy, iz)];
-  let e2 = yEdges[yEdgeIndex(ix + 1u, iy, iz)];
-  let e3 = xEdges[xEdgeIndex(ix, iy + 1u, iz)];
-  let e4 = zEdges[zEdgeIndex(ix, iy, iz)];
-  let e5 = zEdges[zEdgeIndex(ix + 1u, iy, iz)];
-  let e6 = zEdges[zEdgeIndex(ix, iy + 1u, iz)];
-  let e7 = zEdges[zEdgeIndex(ix + 1u, iy + 1u, iz)];
-  let e8 = xEdges[xEdgeIndex(ix, iy, iz + 1u)];
-  let e9 = yEdges[yEdgeIndex(ix, iy, iz + 1u)];
-  let e10 = yEdges[yEdgeIndex(ix + 1u, iy, iz + 1u)];
-  let e11 = xEdges[xEdgeIndex(ix, iy + 1u, iz + 1u)];
+  let e0 = xEdges[xEdgeIndexLocal(ix, iy, localZ)];
+  let e1 = yEdges[yEdgeIndexLocal(ix, iy, localZ)];
+  let e2 = yEdges[yEdgeIndexLocal(ix + 1u, iy, localZ)];
+  let e3 = xEdges[xEdgeIndexLocal(ix, iy + 1u, localZ)];
+  let e4 = zEdges[zEdgeIndexLocal(ix, iy, localZ)];
+  let e5 = zEdges[zEdgeIndexLocal(ix + 1u, iy, localZ)];
+  let e6 = zEdges[zEdgeIndexLocal(ix, iy + 1u, localZ)];
+  let e7 = zEdges[zEdgeIndexLocal(ix + 1u, iy + 1u, localZ)];
+  let e8 = xEdges[xEdgeIndexLocal(ix, iy, localZ + 1u)];
+  let e9 = yEdges[yEdgeIndexLocal(ix, iy, localZ + 1u)];
+  let e10 = yEdges[yEdgeIndexLocal(ix + 1u, iy, localZ + 1u)];
+  let e11 = xEdges[xEdgeIndexLocal(ix, iy + 1u, localZ + 1u)];
 
   var massPoint = vec3<f32>(0.0);
   var count = 0.0;
@@ -1535,11 +1805,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
   var p = massPoint + solveSymmetric3(a00, a01, a02, a11, a12, a22, rhs);
   if (params.clip != 0u) {
-    p = clipToCube(p, ix, iy, iz);
+    p = clipToCube(p, ix, iy, localZ);
   }
 
-  cubes[i].isActive = 1u;
-  cubes[i].pos = vec4<f32>(p, 1.0);
+  cubes[cubeIndex].isActive = 1u;
+  cubes[cubeIndex].pos = vec4<f32>(p, 1.0);
 }
 `;
 }
@@ -1547,88 +1817,108 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 function buildEmitShader(solidWGSL: string, workgroupSize: number, axis: 'x' | 'y' | 'z'): string {
   const decode = axis === 'x'
     ? `
-  let total = params.nx * (params.ny + 1u) * (params.nz + 1u);
+  let total = params.nx * (params.ny + 1u) * batch.localZCount;
   if (i >= total) { return; }
   let ix = i % params.nx;
   let t = i / params.nx;
   let iy = t % (params.ny + 1u);
-  let iz = t / (params.ny + 1u);
-  if (iy == 0u || iz == 0u || iy >= params.ny || iz >= params.nz) { return; }
-  let edge = edges[i];
+  let localZ = batch.localZStart + t / (params.ny + 1u);
+  let globalZ = globalCornerZ(localZ);
+  if (iy == 0u || globalZ == 0u || iy >= params.ny || globalZ >= params.nz) { return; }
+  let edge = edges[xEdgeIndexLocal(ix, iy, localZ)];
   if (edge.isActive == 0u) { return; }
-  var ids = array<u32, 4>(
-    cubeIndex(ix, iy, iz - 1u),
-    cubeIndex(ix, iy - 1u, iz - 1u),
-    cubeIndex(ix, iy - 1u, iz),
-    cubeIndex(ix, iy, iz),
+  var cubeIds = array<u32, 4>(
+    cubeBufferIndex(ix, iy, localZ - 1u),
+    cubeBufferIndex(ix, iy - 1u, localZ - 1u),
+    cubeBufferIndex(ix, iy - 1u, localZ),
+    cubeBufferIndex(ix, iy, localZ),
   );
-  let flip = corners[cornerIndex(ix, iy, iz)] != 0u;
+  var globalIds = array<u32, 4>(
+    cubeGlobalIndex(ix, iy, localZ - 1u),
+    cubeGlobalIndex(ix, iy - 1u, localZ - 1u),
+    cubeGlobalIndex(ix, iy - 1u, localZ),
+    cubeGlobalIndex(ix, iy, localZ),
+  );
+  let flip = corners[cornerIndexLocal(ix, iy, localZ)] != 0u;
 `
     : axis === 'y'
       ? `
-  let total = (params.nx + 1u) * params.ny * (params.nz + 1u);
+  let total = (params.nx + 1u) * params.ny * batch.localZCount;
   if (i >= total) { return; }
   let ix = i % (params.nx + 1u);
   let t = i / (params.nx + 1u);
   let iy = t % params.ny;
-  let iz = t / params.ny;
-  if (ix == 0u || iz == 0u || ix >= params.nx || iz >= params.nz) { return; }
-  let edge = edges[i];
+  let localZ = batch.localZStart + t / params.ny;
+  let globalZ = globalCornerZ(localZ);
+  if (ix == 0u || globalZ == 0u || ix >= params.nx || globalZ >= params.nz) { return; }
+  let edge = edges[yEdgeIndexLocal(ix, iy, localZ)];
   if (edge.isActive == 0u) { return; }
-  var ids = array<u32, 4>(
-    cubeIndex(ix - 1u, iy, iz),
-    cubeIndex(ix - 1u, iy, iz - 1u),
-    cubeIndex(ix, iy, iz - 1u),
-    cubeIndex(ix, iy, iz),
+  var cubeIds = array<u32, 4>(
+    cubeBufferIndex(ix - 1u, iy, localZ),
+    cubeBufferIndex(ix - 1u, iy, localZ - 1u),
+    cubeBufferIndex(ix, iy, localZ - 1u),
+    cubeBufferIndex(ix, iy, localZ),
   );
-  let flip = corners[cornerIndex(ix, iy, iz)] != 0u;
+  var globalIds = array<u32, 4>(
+    cubeGlobalIndex(ix - 1u, iy, localZ),
+    cubeGlobalIndex(ix - 1u, iy, localZ - 1u),
+    cubeGlobalIndex(ix, iy, localZ - 1u),
+    cubeGlobalIndex(ix, iy, localZ),
+  );
+  let flip = corners[cornerIndexLocal(ix, iy, localZ)] != 0u;
 `
       : `
-  let total = (params.nx + 1u) * (params.ny + 1u) * params.nz;
+  let total = (params.nx + 1u) * (params.ny + 1u) * batch.localZCount;
   if (i >= total) { return; }
   let ix = i % (params.nx + 1u);
   let t = i / (params.nx + 1u);
   let iy = t % (params.ny + 1u);
-  let iz = t / (params.ny + 1u);
+  let localZ = batch.localZStart + t / (params.ny + 1u);
   if (ix == 0u || iy == 0u || ix >= params.nx || iy >= params.ny) { return; }
-  let edge = edges[i];
+  let edge = edges[zEdgeIndexLocal(ix, iy, localZ)];
   if (edge.isActive == 0u) { return; }
-  var ids = array<u32, 4>(
-    cubeIndex(ix, iy - 1u, iz),
-    cubeIndex(ix - 1u, iy - 1u, iz),
-    cubeIndex(ix - 1u, iy, iz),
-    cubeIndex(ix, iy, iz),
+  var cubeIds = array<u32, 4>(
+    cubeBufferIndex(ix, iy - 1u, localZ),
+    cubeBufferIndex(ix - 1u, iy - 1u, localZ),
+    cubeBufferIndex(ix - 1u, iy, localZ),
+    cubeBufferIndex(ix, iy, localZ),
   );
-  let flip = corners[cornerIndex(ix, iy, iz)] != 0u;
+  var globalIds = array<u32, 4>(
+    cubeGlobalIndex(ix, iy - 1u, localZ),
+    cubeGlobalIndex(ix - 1u, iy - 1u, localZ),
+    cubeGlobalIndex(ix - 1u, iy, localZ),
+    cubeGlobalIndex(ix, iy, localZ),
+  );
+  let flip = corners[cornerIndexLocal(ix, iy, localZ)] != 0u;
 `;
 
   return /* wgsl */`
 ${wgslHeader(solidWGSL)}
-@group(0) @binding(1) var<storage, read> corners: array<u32>;
-@group(0) @binding(2) var<storage, read> edges: array<HermiteEdge>;
-@group(0) @binding(3) var<storage, read> cubes: array<CubeVertex>;
-@group(0) @binding(4) var<storage, read> offsets: array<u32>;
-@group(0) @binding(5) var<storage, read_write> triangles: array<TriangleIndex>;
+@group(0) @binding(2) var<storage, read> corners: array<u32>;
+@group(0) @binding(3) var<storage, read> edges: array<HermiteEdge>;
+@group(0) @binding(4) var<storage, read> cubes: array<CubeVertex>;
+@group(0) @binding(5) var<storage, read> offsets: array<u32>;
+@group(0) @binding(6) var<storage, read_write> triangles: array<TriangleIndex>;
 
 @compute @workgroup_size(${workgroupSize})
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
 ${decode}
-  var p0 = cubes[ids[0]].pos.xyz;
-  var p1 = cubes[ids[1]].pos.xyz;
-  var p2 = cubes[ids[2]].pos.xyz;
-  var p3 = cubes[ids[3]].pos.xyz;
-  if (cubes[ids[0]].isActive == 0u || cubes[ids[1]].isActive == 0u || cubes[ids[2]].isActive == 0u || cubes[ids[3]].isActive == 0u) {
+  var p0 = cubes[cubeIds[0]].pos.xyz;
+  var p1 = cubes[cubeIds[1]].pos.xyz;
+  var p2 = cubes[cubeIds[2]].pos.xyz;
+  var p3 = cubes[cubeIds[3]].pos.xyz;
+  if (cubes[cubeIds[0]].isActive == 0u || cubes[cubeIds[1]].isActive == 0u || cubes[cubeIds[2]].isActive == 0u || cubes[cubeIds[3]].isActive == 0u) {
     return;
   }
 
   if (flip) {
-    let tmp0 = ids[0];
-    let tmp1 = ids[1];
-    ids[0] = ids[3];
-    ids[1] = ids[2];
-    ids[2] = tmp1;
-    ids[3] = tmp0;
+    let tmp0 = globalIds[0];
+    let tmp1 = globalIds[1];
+    globalIds[0] = globalIds[3];
+    globalIds[1] = globalIds[2];
+    globalIds[2] = tmp1;
+    globalIds[3] = tmp0;
     let pp0 = p0;
     let pp1 = p1;
     p0 = p3;
@@ -1640,11 +1930,11 @@ ${decode}
   let useFirst = chooseFirstDiagonal(p0, p1, p2, p3);
   let base = offsets[i];
   if (useFirst) {
-    triangles[base + 0u] = TriangleIndex(ids[0], ids[1], ids[2], 0u);
-    triangles[base + 1u] = TriangleIndex(ids[0], ids[2], ids[3], 0u);
+    triangles[base + 0u] = TriangleIndex(globalIds[0], globalIds[1], globalIds[2], 0u);
+    triangles[base + 1u] = TriangleIndex(globalIds[0], globalIds[2], globalIds[3], 0u);
   } else {
-    triangles[base + 0u] = TriangleIndex(ids[1], ids[2], ids[3], 0u);
-    triangles[base + 1u] = TriangleIndex(ids[1], ids[3], ids[0], 0u);
+    triangles[base + 0u] = TriangleIndex(globalIds[1], globalIds[2], globalIds[3], 0u);
+    triangles[base + 1u] = TriangleIndex(globalIds[1], globalIds[3], globalIds[0], 0u);
   }
 }
 `;
@@ -1653,79 +1943,80 @@ ${decode}
 function buildCountShader(solidWGSL: string, workgroupSize: number, axis: 'x' | 'y' | 'z'): string {
   const decode = axis === 'x'
     ? `
-  let total = params.nx * (params.ny + 1u) * (params.nz + 1u);
+  let total = params.nx * (params.ny + 1u) * batch.localZCount;
   if (i >= total) { return; }
   let ix = i % params.nx;
   let t = i / params.nx;
   let iy = t % (params.ny + 1u);
-  let iz = t / (params.ny + 1u);
-  if (iy == 0u || iz == 0u || iy >= params.ny || iz >= params.nz) {
+  let localZ = batch.localZStart + t / (params.ny + 1u);
+  let globalZ = globalCornerZ(localZ);
+  if (iy == 0u || globalZ == 0u || iy >= params.ny || globalZ >= params.nz) {
     counts[i] = 0u;
     return;
   }
-  let edge = edges[i];
+  let edge = edges[xEdgeIndexLocal(ix, iy, localZ)];
   if (edge.isActive == 0u) {
     counts[i] = 0u;
     return;
   }
   let ids = array<u32, 4>(
-    cubeIndex(ix, iy, iz - 1u),
-    cubeIndex(ix, iy - 1u, iz - 1u),
-    cubeIndex(ix, iy - 1u, iz),
-    cubeIndex(ix, iy, iz),
+    cubeBufferIndex(ix, iy, localZ - 1u),
+    cubeBufferIndex(ix, iy - 1u, localZ - 1u),
+    cubeBufferIndex(ix, iy - 1u, localZ),
+    cubeBufferIndex(ix, iy, localZ),
   );
 `
     : axis === 'y'
       ? `
-  let total = (params.nx + 1u) * params.ny * (params.nz + 1u);
+  let total = (params.nx + 1u) * params.ny * batch.localZCount;
   if (i >= total) { return; }
   let ix = i % (params.nx + 1u);
   let t = i / (params.nx + 1u);
   let iy = t % params.ny;
-  let iz = t / params.ny;
-  if (ix == 0u || iz == 0u || ix >= params.nx || iz >= params.nz) {
+  let localZ = batch.localZStart + t / params.ny;
+  let globalZ = globalCornerZ(localZ);
+  if (ix == 0u || globalZ == 0u || ix >= params.nx || globalZ >= params.nz) {
     counts[i] = 0u;
     return;
   }
-  let edge = edges[i];
+  let edge = edges[yEdgeIndexLocal(ix, iy, localZ)];
   if (edge.isActive == 0u) {
     counts[i] = 0u;
     return;
   }
   let ids = array<u32, 4>(
-    cubeIndex(ix - 1u, iy, iz),
-    cubeIndex(ix - 1u, iy, iz - 1u),
-    cubeIndex(ix, iy, iz - 1u),
-    cubeIndex(ix, iy, iz),
+    cubeBufferIndex(ix - 1u, iy, localZ),
+    cubeBufferIndex(ix - 1u, iy, localZ - 1u),
+    cubeBufferIndex(ix, iy, localZ - 1u),
+    cubeBufferIndex(ix, iy, localZ),
   );
 `
       : `
-  let total = (params.nx + 1u) * (params.ny + 1u) * params.nz;
+  let total = (params.nx + 1u) * (params.ny + 1u) * batch.localZCount;
   if (i >= total) { return; }
   let ix = i % (params.nx + 1u);
   let t = i / (params.nx + 1u);
   let iy = t % (params.ny + 1u);
-  let iz = t / (params.ny + 1u);
+  let localZ = batch.localZStart + t / (params.ny + 1u);
   if (ix == 0u || iy == 0u || ix >= params.nx || iy >= params.ny) {
     counts[i] = 0u;
     return;
   }
-  let edge = edges[i];
+  let edge = edges[zEdgeIndexLocal(ix, iy, localZ)];
   if (edge.isActive == 0u) {
     counts[i] = 0u;
     return;
   }
   let ids = array<u32, 4>(
-    cubeIndex(ix, iy - 1u, iz),
-    cubeIndex(ix - 1u, iy - 1u, iz),
-    cubeIndex(ix - 1u, iy, iz),
-    cubeIndex(ix, iy, iz),
+    cubeBufferIndex(ix, iy - 1u, localZ),
+    cubeBufferIndex(ix - 1u, iy - 1u, localZ),
+    cubeBufferIndex(ix - 1u, iy, localZ),
+    cubeBufferIndex(ix, iy, localZ),
   );
 `;
 
   return /* wgsl */`
 ${wgslHeader(solidWGSL)}
-@group(0) @binding(1) var<storage, read> corners: array<u32>;
 @group(0) @binding(2) var<storage, read> edges: array<HermiteEdge>;
 @group(0) @binding(3) var<storage, read> cubes: array<CubeVertex>;
 @group(0) @binding(4) var<storage, read_write> counts: array<u32>;
