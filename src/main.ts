@@ -1,6 +1,6 @@
 import './styles.css';
 
-import { dualContourWebGPU, exampleSphereSolidWGSL } from './dual_contouring';
+import { dualContourWebGPU, exampleSphereSolidWGSL, type DualContourMetrics } from './dual_contouring';
 import { meshToBinarySTL } from './stl';
 import type { Vec3 } from './vec3';
 
@@ -125,6 +125,7 @@ generateButton.addEventListener('click', async () => {
       repair: repairInput.checked,
       label: 'webui-dual-contour',
     });
+    logDualContourMetrics('webui-dual-contour', result.metrics);
 
     const initialTriangleCount = result.initial.indices.length / 3;
     const initialVertexCount = result.initial.positions.length / 3;
@@ -253,4 +254,19 @@ function formatError(error: unknown): string {
     return error.message;
   }
   return `${error}`;
+}
+
+function logDualContourMetrics(label: string, metrics: DualContourMetrics): void {
+  let cumulative = 0;
+  const rows = metrics.stages.map(({ stage, ms }) => {
+    cumulative += ms;
+    return {
+      stage,
+      ms: Number(ms.toFixed(2)),
+      cumulativeMs: Number(cumulative.toFixed(2)),
+    };
+  });
+  console.groupCollapsed(`[${label}] stage timings (${metrics.totalMs.toFixed(2)} ms total)`);
+  console.table(rows);
+  console.groupEnd();
 }

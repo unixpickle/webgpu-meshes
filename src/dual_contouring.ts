@@ -15,15 +15,55 @@ import {
 
 const GPUBufferUsageAny: any = (globalThis as any).GPUBufferUsage;
 const GPUMapModeAny: any = (globalThis as any).GPUMapMode;
+const GPUShaderStageAny: any = (globalThis as any).GPUShaderStage;
 
 export interface DualContourResult {
   /** Mesh emitted directly from the GPU passes, before CPU repair. */
   initial: IndexedMesh;
   /** Mesh after duplicate resolution and singular edge / singular vertex repair on the CPU. */
   repaired: IndexedMesh;
+  /** Timing metrics collected while generating and repairing the mesh. */
+  metrics: DualContourMetrics;
+}
+
+export interface DualContourMetrics {
+  totalMs: number;
+  stages: DualContourStageTiming[];
 }
 
 export type TriangleMode = 'max-min-area' | 'sharpest' | 'flattest';
+export type DualContourSolidBindingKind = 'uniform' | 'storage';
+
+export interface DualContourSolidBinding {
+  /**
+   * WGSL variable name exposed to solidWGSL.
+   */
+  name: string;
+  /**
+   * Buffer address space. All user bindings are read-only in WGSL.
+   */
+  kind: DualContourSolidBindingKind;
+  /**
+   * WGSL type for the binding, e.g. `f32`, `MyParams`, or `array<vec4<f32>>`.
+   */
+  wgslType: string;
+  /**
+   * Optional WGSL type declarations required by wgslType.
+   */
+  wgslDefs?: string;
+  /**
+   * Typed array / ArrayBuffer data to upload, or an existing GPUBuffer.
+   */
+  source: BufferSource | any;
+  /**
+   * Optional binding size in bytes when source is a GPUBuffer.
+   */
+  size?: number;
+  /**
+   * Optional label for an internally-created GPU buffer.
+   */
+  label?: string;
+}
 
 export interface DualContouringWebGPUOptions {
   device: any;
@@ -33,6 +73,11 @@ export interface DualContouringWebGPUOptions {
    * The function is inlined into every compute shader.
    */
   solidWGSL: string;
+  /**
+   * Optional read-only buffers exposed to solidWGSL as @group(1) bindings.
+   * Bindings are assigned in array order starting at 0.
+   */
+  solidBindings?: DualContourSolidBinding[];
   min: Vec3;
   max: Vec3;
   delta: number;
@@ -96,7 +141,17 @@ interface SingularVertexGroup {
   components: number[][];
 }
 
-interface StageTiming {
+interface NormalizedSolidBinding {
+  binding: number;
+  kind: DualContourSolidBindingKind;
+  name: string;
+  wgslType: string;
+  wgslDefs: string;
+  buffer: any;
+  size: number;
+}
+
+export interface DualContourStageTiming {
   stage: string;
   ms: number;
 }
@@ -109,11 +164,7 @@ const CUBE_STRIDE = 32;
 const TRIANGLE_STRIDE = 16;
 
 export async function dualContourWebGPU(options: DualContouringWebGPUOptions): Promise<DualContourResult> {
-  return dualContourWebGPUWithGPUHermite(options);
-}
-
-async function dualContourWebGPUWithGPUHermite(options: DualContouringWebGPUOptions): Promise<DualContourResult> {
-  const timings: StageTiming[] = [];
+  const timings: DualContourStageTiming[] = [];
   const startTime = performance.now();
   let stageStartTime = startTime;
   const markStage = (stage: string) => {
@@ -128,6 +179,7 @@ async function dualContourWebGPUWithGPUHermite(options: DualContouringWebGPUOpti
   markStage('normalize options + grid');
 
   const device = config.device;
+  const solidBindings = prepareSolidBindings(device, config.solidBindings ?? [], config.label);
   const workgroupSize = config.workgroupSize;
   const deviceLimits = device.limits as Record<string, number | undefined> | undefined;
   const maxStorageBindingSize = deviceLimits?.maxStorageBufferBindingSize ?? 128 * 1024 * 1024;
@@ -243,66 +295,104 @@ async function dualContourWebGPUWithGPUHermite(options: DualContouringWebGPUOpti
   });
   device.queue.writeBuffer(staticUniformBuffer, 0, packStaticUniforms(grid, layout, config));
 
-  const shaders = buildShaderBundle(config.solidWGSL, workgroupSize);
+  const cornerBindGroupLayout = createInternalBindGroupLayout(device, [
+    { binding: 0, type: 'uniform' },
+    { binding: 1, type: 'uniform' },
+    { binding: 2, type: 'storage' },
+  ]);
+  const edgeBindGroupLayout = createInternalBindGroupLayout(device, [
+    { binding: 0, type: 'uniform' },
+    { binding: 1, type: 'uniform' },
+    { binding: 2, type: 'read-only-storage' },
+    { binding: 3, type: 'storage' },
+  ]);
+  const cubeBindGroupLayout = createInternalBindGroupLayout(device, [
+    { binding: 0, type: 'uniform' },
+    { binding: 1, type: 'uniform' },
+    { binding: 2, type: 'read-only-storage' },
+    { binding: 3, type: 'read-only-storage' },
+    { binding: 4, type: 'read-only-storage' },
+    { binding: 5, type: 'read-only-storage' },
+    { binding: 6, type: 'storage' },
+  ]);
+  const countBindGroupLayout = createInternalBindGroupLayout(device, [
+    { binding: 0, type: 'uniform' },
+    { binding: 1, type: 'uniform' },
+    { binding: 2, type: 'read-only-storage' },
+    { binding: 3, type: 'read-only-storage' },
+    { binding: 4, type: 'storage' },
+  ]);
+  const emitBindGroupLayout = createInternalBindGroupLayout(device, [
+    { binding: 0, type: 'uniform' },
+    { binding: 1, type: 'uniform' },
+    { binding: 2, type: 'read-only-storage' },
+    { binding: 3, type: 'read-only-storage' },
+    { binding: 4, type: 'read-only-storage' },
+    { binding: 5, type: 'read-only-storage' },
+    { binding: 6, type: 'storage' },
+  ]);
+  const solidBindGroupLayout = solidBindings.length === 0 ? null : createSolidBindGroupLayout(device, solidBindings);
+
+  const shaders = buildShaderBundle(config.solidWGSL, solidBindings, workgroupSize);
   const cornerPipeline = device.createComputePipeline({
     label: `${config.label}-corner-pipeline`,
-    layout: 'auto',
+    layout: createPipelineLayout(device, cornerBindGroupLayout, solidBindGroupLayout),
     compute: { module: device.createShaderModule({ code: shaders.corner }), entryPoint: 'main' },
   });
   const xEdgePipeline = device.createComputePipeline({
     label: `${config.label}-x-edge-pipeline`,
-    layout: 'auto',
+    layout: createPipelineLayout(device, edgeBindGroupLayout, solidBindGroupLayout),
     compute: { module: device.createShaderModule({ code: shaders.edgeX }), entryPoint: 'main' },
   });
   const yEdgePipeline = device.createComputePipeline({
     label: `${config.label}-y-edge-pipeline`,
-    layout: 'auto',
+    layout: createPipelineLayout(device, edgeBindGroupLayout, solidBindGroupLayout),
     compute: { module: device.createShaderModule({ code: shaders.edgeY }), entryPoint: 'main' },
   });
   const zEdgePipeline = device.createComputePipeline({
     label: `${config.label}-z-edge-pipeline`,
-    layout: 'auto',
+    layout: createPipelineLayout(device, edgeBindGroupLayout, solidBindGroupLayout),
     compute: { module: device.createShaderModule({ code: shaders.edgeZ }), entryPoint: 'main' },
   });
   const cubePipeline = device.createComputePipeline({
     label: `${config.label}-cube-pipeline`,
-    layout: 'auto',
+    layout: createPipelineLayout(device, cubeBindGroupLayout, solidBindGroupLayout),
     compute: { module: device.createShaderModule({ code: shaders.cube }), entryPoint: 'main' },
   });
   const countXPipeline = device.createComputePipeline({
     label: `${config.label}-count-x-pipeline`,
-    layout: 'auto',
+    layout: createPipelineLayout(device, countBindGroupLayout),
     compute: { module: device.createShaderModule({ code: shaders.countX }), entryPoint: 'main' },
   });
   const countYPipeline = device.createComputePipeline({
     label: `${config.label}-count-y-pipeline`,
-    layout: 'auto',
+    layout: createPipelineLayout(device, countBindGroupLayout),
     compute: { module: device.createShaderModule({ code: shaders.countY }), entryPoint: 'main' },
   });
   const countZPipeline = device.createComputePipeline({
     label: `${config.label}-count-z-pipeline`,
-    layout: 'auto',
+    layout: createPipelineLayout(device, countBindGroupLayout),
     compute: { module: device.createShaderModule({ code: shaders.countZ }), entryPoint: 'main' },
   });
   const emitXPipeline = device.createComputePipeline({
     label: `${config.label}-emit-x-pipeline`,
-    layout: 'auto',
+    layout: createPipelineLayout(device, emitBindGroupLayout),
     compute: { module: device.createShaderModule({ code: shaders.emitX }), entryPoint: 'main' },
   });
   const emitYPipeline = device.createComputePipeline({
     label: `${config.label}-emit-y-pipeline`,
-    layout: 'auto',
+    layout: createPipelineLayout(device, emitBindGroupLayout),
     compute: { module: device.createShaderModule({ code: shaders.emitY }), entryPoint: 'main' },
   });
   const emitZPipeline = device.createComputePipeline({
     label: `${config.label}-emit-z-pipeline`,
-    layout: 'auto',
+    layout: createPipelineLayout(device, emitBindGroupLayout),
     compute: { module: device.createShaderModule({ code: shaders.emitZ }), entryPoint: 'main' },
   });
   markStage('build shaders + pipelines');
 
   const cornerBindGroup = device.createBindGroup({
-    layout: cornerPipeline.getBindGroupLayout(0),
+    layout: cornerBindGroupLayout,
     entries: [
       { binding: 0, resource: { buffer: staticUniformBuffer } },
       { binding: 1, resource: { buffer: cornerRangeBuffer } },
@@ -310,7 +400,7 @@ async function dualContourWebGPUWithGPUHermite(options: DualContouringWebGPUOpti
     ],
   });
   const xEdgeBindGroup = device.createBindGroup({
-    layout: xEdgePipeline.getBindGroupLayout(0),
+    layout: edgeBindGroupLayout,
     entries: [
       { binding: 0, resource: { buffer: staticUniformBuffer } },
       { binding: 1, resource: { buffer: cornerRangeBuffer } },
@@ -319,7 +409,7 @@ async function dualContourWebGPUWithGPUHermite(options: DualContouringWebGPUOpti
     ],
   });
   const yEdgeBindGroup = device.createBindGroup({
-    layout: yEdgePipeline.getBindGroupLayout(0),
+    layout: edgeBindGroupLayout,
     entries: [
       { binding: 0, resource: { buffer: staticUniformBuffer } },
       { binding: 1, resource: { buffer: cornerRangeBuffer } },
@@ -328,7 +418,7 @@ async function dualContourWebGPUWithGPUHermite(options: DualContouringWebGPUOpti
     ],
   });
   const zEdgeBindGroup = device.createBindGroup({
-    layout: zEdgePipeline.getBindGroupLayout(0),
+    layout: edgeBindGroupLayout,
     entries: [
       { binding: 0, resource: { buffer: staticUniformBuffer } },
       { binding: 1, resource: { buffer: cubeRangeBuffer } },
@@ -337,7 +427,7 @@ async function dualContourWebGPUWithGPUHermite(options: DualContouringWebGPUOpti
     ],
   });
   const cubeBindGroup = device.createBindGroup({
-    layout: cubePipeline.getBindGroupLayout(0),
+    layout: cubeBindGroupLayout,
     entries: [
       { binding: 0, resource: { buffer: staticUniformBuffer } },
       { binding: 1, resource: { buffer: cubeRangeBuffer } },
@@ -349,7 +439,7 @@ async function dualContourWebGPUWithGPUHermite(options: DualContouringWebGPUOpti
     ],
   });
   const countXBindGroup = device.createBindGroup({
-    layout: countXPipeline.getBindGroupLayout(0),
+    layout: countBindGroupLayout,
     entries: [
       { binding: 0, resource: { buffer: staticUniformBuffer } },
       { binding: 1, resource: { buffer: xyEmitRangeBuffer } },
@@ -359,7 +449,7 @@ async function dualContourWebGPUWithGPUHermite(options: DualContouringWebGPUOpti
     ],
   });
   const countYBindGroup = device.createBindGroup({
-    layout: countYPipeline.getBindGroupLayout(0),
+    layout: countBindGroupLayout,
     entries: [
       { binding: 0, resource: { buffer: staticUniformBuffer } },
       { binding: 1, resource: { buffer: xyEmitRangeBuffer } },
@@ -369,7 +459,7 @@ async function dualContourWebGPUWithGPUHermite(options: DualContouringWebGPUOpti
     ],
   });
   const countZBindGroup = device.createBindGroup({
-    layout: countZPipeline.getBindGroupLayout(0),
+    layout: countBindGroupLayout,
     entries: [
       { binding: 0, resource: { buffer: staticUniformBuffer } },
       { binding: 1, resource: { buffer: zEmitRangeBuffer } },
@@ -378,6 +468,7 @@ async function dualContourWebGPUWithGPUHermite(options: DualContouringWebGPUOpti
       { binding: 4, resource: { buffer: zTriangleCountBuffer } },
     ],
   });
+  const solidBindGroup = solidBindGroupLayout === null ? null : createSolidBindGroup(device, solidBindGroupLayout, solidBindings);
   markStage('create bind groups');
 
   const cubeReadback = device.createBuffer({
@@ -410,7 +501,7 @@ async function dualContourWebGPUWithGPUHermite(options: DualContouringWebGPUOpti
   let advanceIntoBatch = 0;
   let batchIndex = 0;
 
-  for (;;) {
+  for (; ;) {
     const remainingAfterWindow = grid.nz + 1 - (layout.cornerRows + zOffset);
     const isFinalBatch = remainingAfterWindow === 0;
     const batchSpec = createBatchSpec(layout, advanceIntoBatch, isFinalBatch);
@@ -426,11 +517,11 @@ async function dualContourWebGPUWithGPUHermite(options: DualContouringWebGPUOpti
     const countEncoder = device.createCommandEncoder({ label: `${config.label}-count-encoder-${batchIndex}` });
     {
       const pass = countEncoder.beginComputePass({ label: `${config.label}-count-pass-${batchIndex}` });
-      dispatch1D(pass, cornerPipeline, cornerBindGroup, batchSpec.cornerFill.localZCount * layout.cornerPlaneSize, workgroupSize);
-      dispatch1D(pass, xEdgePipeline, xEdgeBindGroup, batchSpec.cornerFill.localZCount * layout.xEdgePlaneSize, workgroupSize);
-      dispatch1D(pass, yEdgePipeline, yEdgeBindGroup, batchSpec.cornerFill.localZCount * layout.yEdgePlaneSize, workgroupSize);
-      dispatch1D(pass, zEdgePipeline, zEdgeBindGroup, batchSpec.cubeFill.localZCount * layout.zEdgePlaneSize, workgroupSize);
-      dispatch1D(pass, cubePipeline, cubeBindGroup, batchSpec.cubeFill.localZCount * layout.cubePlaneSize, workgroupSize);
+      dispatch1D(pass, cornerPipeline, cornerBindGroup, batchSpec.cornerFill.localZCount * layout.cornerPlaneSize, workgroupSize, solidBindGroup);
+      dispatch1D(pass, xEdgePipeline, xEdgeBindGroup, batchSpec.cornerFill.localZCount * layout.xEdgePlaneSize, workgroupSize, solidBindGroup);
+      dispatch1D(pass, yEdgePipeline, yEdgeBindGroup, batchSpec.cornerFill.localZCount * layout.yEdgePlaneSize, workgroupSize, solidBindGroup);
+      dispatch1D(pass, zEdgePipeline, zEdgeBindGroup, batchSpec.cubeFill.localZCount * layout.zEdgePlaneSize, workgroupSize, solidBindGroup);
+      dispatch1D(pass, cubePipeline, cubeBindGroup, batchSpec.cubeFill.localZCount * layout.cubePlaneSize, workgroupSize, solidBindGroup);
       dispatch1D(pass, countXPipeline, countXBindGroup, xEmitCount, workgroupSize);
       dispatch1D(pass, countYPipeline, countYBindGroup, yEmitCount, workgroupSize);
       dispatch1D(pass, countZPipeline, countZBindGroup, zEmitCount, workgroupSize);
@@ -497,7 +588,7 @@ async function dualContourWebGPUWithGPUHermite(options: DualContouringWebGPUOpti
       usage: GPUBufferUsageAny.COPY_DST | GPUBufferUsageAny.MAP_READ,
     });
     const emitXBindGroup = device.createBindGroup({
-      layout: emitXPipeline.getBindGroupLayout(0),
+      layout: emitBindGroupLayout,
       entries: [
         { binding: 0, resource: { buffer: staticUniformBuffer } },
         { binding: 1, resource: { buffer: xyEmitRangeBuffer } },
@@ -509,7 +600,7 @@ async function dualContourWebGPUWithGPUHermite(options: DualContouringWebGPUOpti
       ],
     });
     const emitYBindGroup = device.createBindGroup({
-      layout: emitYPipeline.getBindGroupLayout(0),
+      layout: emitBindGroupLayout,
       entries: [
         { binding: 0, resource: { buffer: staticUniformBuffer } },
         { binding: 1, resource: { buffer: xyEmitRangeBuffer } },
@@ -521,7 +612,7 @@ async function dualContourWebGPUWithGPUHermite(options: DualContouringWebGPUOpti
       ],
     });
     const emitZBindGroup = device.createBindGroup({
-      layout: emitZPipeline.getBindGroupLayout(0),
+      layout: emitBindGroupLayout,
       entries: [
         { binding: 0, resource: { buffer: staticUniformBuffer } },
         { binding: 1, resource: { buffer: zEmitRangeBuffer } },
@@ -601,14 +692,21 @@ async function dualContourWebGPUWithGPUHermite(options: DualContouringWebGPUOpti
 
   const repaired = cpuMesh.compact();
   markStage('compact repaired mesh');
-  logDualContourTimings(config.label, timings, performance.now() - startTime);
-  return { initial, repaired };
+  return {
+    initial,
+    repaired,
+    metrics: {
+      totalMs: performance.now() - startTime,
+      stages: timings,
+    },
+  };
 }
 
-function normalizeOptions(options: DualContouringWebGPUOptions): Required<Omit<DualContouringWebGPUOptions, 'device' | 'solidWGSL' | 'min' | 'max' | 'delta'>> & Pick<DualContouringWebGPUOptions, 'device' | 'solidWGSL' | 'min' | 'max' | 'delta'> {
+function normalizeOptions(options: DualContouringWebGPUOptions): Required<Omit<DualContouringWebGPUOptions, 'device' | 'solidWGSL' | 'solidBindings' | 'min' | 'max' | 'delta'>> & Pick<DualContouringWebGPUOptions, 'device' | 'solidWGSL' | 'solidBindings' | 'min' | 'max' | 'delta'> {
   return {
     device: options.device,
     solidWGSL: options.solidWGSL,
+    solidBindings: options.solidBindings ?? [],
     min: options.min,
     max: options.max,
     delta: options.delta,
@@ -740,10 +838,13 @@ function triangleModeToInt(mode: TriangleMode): number {
   }
 }
 
-function dispatch1D(pass: any, pipeline: any, bindGroup: any, count: number, workgroupSize: number): void {
+function dispatch1D(pass: any, pipeline: any, bindGroup: any, count: number, workgroupSize: number, solidBindGroup?: any): void {
   if (count <= 0) return;
   pass.setPipeline(pipeline);
   pass.setBindGroup(0, bindGroup);
+  if (solidBindGroup) {
+    pass.setBindGroup(1, solidBindGroup);
+  }
   pass.dispatchWorkgroups(Math.ceil(count / workgroupSize));
 }
 
@@ -753,6 +854,37 @@ async function readBuffer(buffer: any): Promise<ArrayBuffer> {
   const out = src.slice(0);
   buffer.unmap();
   return out;
+}
+
+function createInternalBindGroupLayout(
+  device: any,
+  entries: Array<{ binding: number; type: 'uniform' | 'storage' | 'read-only-storage' }>,
+): any {
+  return device.createBindGroupLayout({
+    entries: entries.map((entry) => ({
+      binding: entry.binding,
+      visibility: GPUShaderStageAny.COMPUTE,
+      buffer: { type: entry.type },
+    })),
+  });
+}
+
+function createSolidBindGroupLayout(device: any, solidBindings: NormalizedSolidBinding[]): any {
+  return device.createBindGroupLayout({
+    entries: solidBindings.map((binding) => ({
+      binding: binding.binding,
+      visibility: GPUShaderStageAny.COMPUTE,
+      buffer: {
+        type: binding.kind === 'uniform' ? 'uniform' : 'read-only-storage',
+      },
+    })),
+  });
+}
+
+function createPipelineLayout(device: any, primaryLayout: any, solidBindGroupLayout?: any): any {
+  return device.createPipelineLayout({
+    bindGroupLayouts: solidBindGroupLayout ? [primaryLayout, solidBindGroupLayout] : [primaryLayout],
+  });
 }
 
 function assertBufferFits(
@@ -1357,19 +1489,19 @@ interface ShaderBundle {
   emitZ: string;
 }
 
-function buildShaderBundle(solidWGSL: string, workgroupSize: number): ShaderBundle {
+function buildShaderBundle(solidWGSL: string, solidBindings: NormalizedSolidBinding[], workgroupSize: number): ShaderBundle {
   return {
-    corner: buildCornerShader(solidWGSL, workgroupSize),
-    edgeX: buildEdgeShader(solidWGSL, workgroupSize, 'x'),
-    edgeY: buildEdgeShader(solidWGSL, workgroupSize, 'y'),
-    edgeZ: buildEdgeShader(solidWGSL, workgroupSize, 'z'),
-    cube: buildCubeShader(solidWGSL, workgroupSize),
-    countX: buildCountShader(solidWGSL, workgroupSize, 'x'),
-    countY: buildCountShader(solidWGSL, workgroupSize, 'y'),
-    countZ: buildCountShader(solidWGSL, workgroupSize, 'z'),
-    emitX: buildEmitShader(solidWGSL, workgroupSize, 'x'),
-    emitY: buildEmitShader(solidWGSL, workgroupSize, 'y'),
-    emitZ: buildEmitShader(solidWGSL, workgroupSize, 'z'),
+    corner: buildCornerShader(solidWGSL, solidBindings, workgroupSize),
+    edgeX: buildEdgeShader(solidWGSL, solidBindings, workgroupSize, 'x'),
+    edgeY: buildEdgeShader(solidWGSL, solidBindings, workgroupSize, 'y'),
+    edgeZ: buildEdgeShader(solidWGSL, solidBindings, workgroupSize, 'z'),
+    cube: buildCubeShader(solidWGSL, solidBindings, workgroupSize),
+    countX: buildCountShader(solidWGSL, solidBindings, workgroupSize, 'x'),
+    countY: buildCountShader(solidWGSL, solidBindings, workgroupSize, 'y'),
+    countZ: buildCountShader(solidWGSL, solidBindings, workgroupSize, 'z'),
+    emitX: buildEmitShader(solidWGSL, solidBindings, workgroupSize, 'x'),
+    emitY: buildEmitShader(solidWGSL, solidBindings, workgroupSize, 'y'),
+    emitZ: buildEmitShader(solidWGSL, solidBindings, workgroupSize, 'z'),
   };
 }
 
@@ -1451,8 +1583,9 @@ fn bisectOccupancyEdge(p0: vec3<f32>, p1: vec3<f32>, occ0: bool) -> vec3<f32> {
 `;
 }
 
-function wgslHeader(solidWGSL: string): string {
+function wgslHeader(solidWGSL: string, solidBindings: NormalizedSolidBinding[]): string {
   const surfaceHelpers = surfaceHelpersWGSL(solidWGSL);
+  const solidBindingWGSL = buildSolidBindingWGSL(solidBindings);
   return /* wgsl */`
 struct DCParams {
   minCorner: vec3<f32>,
@@ -1508,6 +1641,8 @@ struct TriangleIndex {
 
 @group(0) @binding(0) var<uniform> params: DCParams;
 @group(0) @binding(1) var<uniform> batch: BatchParams;
+
+${solidBindingWGSL}
 
 ${solidWGSL}
 
@@ -1594,9 +1729,9 @@ fn chooseFirstDiagonal(v0: vec3<f32>, v1: vec3<f32>, v2: vec3<f32>, v3: vec3<f32
 `;
 }
 
-function buildCornerShader(solidWGSL: string, workgroupSize: number): string {
+function buildCornerShader(solidWGSL: string, solidBindings: NormalizedSolidBinding[], workgroupSize: number): string {
   return /* wgsl */`
-${wgslHeader(solidWGSL)}
+${wgslHeader(solidWGSL, solidBindings)}
 @group(0) @binding(2) var<storage, read_write> corners: array<u32>;
 
 @compute @workgroup_size(${workgroupSize})
@@ -1615,7 +1750,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 `;
 }
 
-function buildEdgeShader(solidWGSL: string, workgroupSize: number, axis: 'x' | 'y' | 'z'): string {
+function buildEdgeShader(solidWGSL: string, solidBindings: NormalizedSolidBinding[], workgroupSize: number, axis: 'x' | 'y' | 'z'): string {
   const decode = axis === 'x'
     ? `
   let total = params.nx * (params.ny + 1u) * batch.localZCount;
@@ -1659,7 +1794,7 @@ function buildEdgeShader(solidWGSL: string, workgroupSize: number, axis: 'x' | '
 `;
 
   return /* wgsl */`
-${wgslHeader(solidWGSL)}
+${wgslHeader(solidWGSL, solidBindings)}
 @group(0) @binding(2) var<storage, read> corners: array<u32>;
 @group(0) @binding(3) var<storage, read_write> edges: array<HermiteEdge>;
 
@@ -1683,9 +1818,9 @@ ${decode}
 `;
 }
 
-function buildCubeShader(solidWGSL: string, workgroupSize: number): string {
+function buildCubeShader(solidWGSL: string, solidBindings: NormalizedSolidBinding[], workgroupSize: number): string {
   return /* wgsl */`
-${wgslHeader(solidWGSL)}
+${wgslHeader(solidWGSL, solidBindings)}
 @group(0) @binding(2) var<storage, read> corners: array<u32>;
 @group(0) @binding(3) var<storage, read> xEdges: array<HermiteEdge>;
 @group(0) @binding(4) var<storage, read> yEdges: array<HermiteEdge>;
@@ -1814,7 +1949,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 `;
 }
 
-function buildEmitShader(solidWGSL: string, workgroupSize: number, axis: 'x' | 'y' | 'z'): string {
+function buildEmitShader(solidWGSL: string, solidBindings: NormalizedSolidBinding[], workgroupSize: number, axis: 'x' | 'y' | 'z'): string {
   const decode = axis === 'x'
     ? `
   let total = params.nx * (params.ny + 1u) * batch.localZCount;
@@ -1893,7 +2028,7 @@ function buildEmitShader(solidWGSL: string, workgroupSize: number, axis: 'x' | '
 `;
 
   return /* wgsl */`
-${wgslHeader(solidWGSL)}
+${wgslHeader(solidWGSL, solidBindings)}
 @group(0) @binding(2) var<storage, read> corners: array<u32>;
 @group(0) @binding(3) var<storage, read> edges: array<HermiteEdge>;
 @group(0) @binding(4) var<storage, read> cubes: array<CubeVertex>;
@@ -1940,7 +2075,7 @@ ${decode}
 `;
 }
 
-function buildCountShader(solidWGSL: string, workgroupSize: number, axis: 'x' | 'y' | 'z'): string {
+function buildCountShader(solidWGSL: string, solidBindings: NormalizedSolidBinding[], workgroupSize: number, axis: 'x' | 'y' | 'z'): string {
   const decode = axis === 'x'
     ? `
   let total = params.nx * (params.ny + 1u) * batch.localZCount;
@@ -2016,7 +2151,7 @@ function buildCountShader(solidWGSL: string, workgroupSize: number, axis: 'x' | 
 `;
 
   return /* wgsl */`
-${wgslHeader(solidWGSL)}
+${wgslHeader(solidWGSL, solidBindings)}
 @group(0) @binding(2) var<storage, read> edges: array<HermiteEdge>;
 @group(0) @binding(3) var<storage, read> cubes: array<CubeVertex>;
 @group(0) @binding(4) var<storage, read_write> counts: array<u32>;
@@ -2053,17 +2188,110 @@ fn solidOccupancy(p: vec3<f32>) -> bool {
 }
 `;
 
-function logDualContourTimings(label: string, timings: StageTiming[], totalMs: number): void {
-  let cumulative = 0;
-  const rows = timings.map(({ stage, ms }) => {
-    cumulative += ms;
+function prepareSolidBindings(device: any, solidBindings: DualContourSolidBinding[], label: string): NormalizedSolidBinding[] {
+  const seenNames = new Set<string>();
+  return solidBindings.map((binding, bindingIndex) => {
+    validateSolidBinding(binding, bindingIndex, seenNames);
+    const resource = createSolidBindingResource(device, binding, label, bindingIndex);
     return {
-      stage,
-      ms: Number(ms.toFixed(2)),
-      cumulativeMs: Number(cumulative.toFixed(2)),
+      binding: bindingIndex,
+      kind: binding.kind,
+      name: binding.name,
+      wgslType: binding.wgslType.trim(),
+      wgslDefs: binding.wgslDefs?.trim() ?? '',
+      buffer: resource.buffer,
+      size: resource.size,
     };
   });
-  console.groupCollapsed(`[${label}] stage timings (${totalMs.toFixed(2)} ms total)`);
-  console.table(rows);
-  console.groupEnd();
+}
+
+function validateSolidBinding(binding: DualContourSolidBinding, bindingIndex: number, seenNames: Set<string>): void {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(binding.name)) {
+    throw new Error(`dualContourWebGPU(): solidBindings[${bindingIndex}] has invalid WGSL identifier "${binding.name}".`);
+  }
+  if (seenNames.has(binding.name)) {
+    throw new Error(`dualContourWebGPU(): duplicate solid binding name "${binding.name}".`);
+  }
+  seenNames.add(binding.name);
+  if (binding.kind !== 'uniform' && binding.kind !== 'storage') {
+    throw new Error(`dualContourWebGPU(): solidBindings[${bindingIndex}] has invalid kind "${String(binding.kind)}".`);
+  }
+  if (!binding.wgslType.trim()) {
+    throw new Error(`dualContourWebGPU(): solidBindings[${bindingIndex}] must provide a non-empty wgslType.`);
+  }
+}
+
+function createSolidBindingResource(device: any, binding: DualContourSolidBinding, label: string, bindingIndex: number): { buffer: any; size: number } {
+  const source = binding.source;
+  if (isBufferSource(source)) {
+    const byteLength = getBufferSourceSize(source);
+    if (byteLength <= 0) {
+      throw new Error(`dualContourWebGPU(): solidBindings[${bindingIndex}] data source must contain at least one byte.`);
+    }
+    const usage = (binding.kind === 'uniform' ? GPUBufferUsageAny.UNIFORM : GPUBufferUsageAny.STORAGE) | GPUBufferUsageAny.COPY_DST;
+    const buffer = device.createBuffer({
+      label: binding.label ?? `${label}-solid-binding-${bindingIndex}-${binding.name}`,
+      size: byteLength,
+      usage,
+    });
+    writeSolidBindingBuffer(device, buffer, source);
+    return { buffer, size: byteLength };
+  }
+  if (!source || typeof source !== 'object' || typeof source.size !== 'number') {
+    throw new Error(`dualContourWebGPU(): solidBindings[${bindingIndex}] source must be a typed array, ArrayBuffer, or GPUBuffer.`);
+  }
+  const requiredUsage = binding.kind === 'uniform' ? GPUBufferUsageAny.UNIFORM : GPUBufferUsageAny.STORAGE;
+  const usage = typeof source.usage === 'number' ? source.usage : 0;
+  if ((usage & requiredUsage) === 0) {
+    throw new Error(
+      `dualContourWebGPU(): solidBindings[${bindingIndex}] GPUBuffer is missing ${binding.kind.toUpperCase()} usage.`,
+    );
+  }
+  const size = binding.size ?? source.size;
+  if (!(size > 0) || size > source.size) {
+    throw new Error(`dualContourWebGPU(): solidBindings[${bindingIndex}] size must be in (0, buffer.size].`);
+  }
+  return { buffer: source, size };
+}
+
+function isBufferSource(value: unknown): value is BufferSource {
+  return value instanceof ArrayBuffer || ArrayBuffer.isView(value);
+}
+
+function getBufferSourceSize(source: BufferSource): number {
+  return source.byteLength;
+}
+
+function writeSolidBindingBuffer(device: any, buffer: any, source: BufferSource): void {
+  if (source instanceof ArrayBuffer) {
+    device.queue.writeBuffer(buffer, 0, source);
+  } else {
+    device.queue.writeBuffer(buffer, 0, source.buffer, source.byteOffset, source.byteLength);
+  }
+}
+
+function createSolidBindGroup(device: any, layout: any, solidBindings: NormalizedSolidBinding[]): any {
+  return device.createBindGroup({
+    layout,
+    entries: solidBindings.map((binding) => ({
+      binding: binding.binding,
+      resource: {
+        buffer: binding.buffer,
+        size: binding.size,
+      },
+    })),
+  });
+}
+
+function buildSolidBindingWGSL(solidBindings: NormalizedSolidBinding[]): string {
+  if (solidBindings.length === 0) {
+    return '';
+  }
+  const defs = [...new Set(solidBindings.map((binding) => binding.wgslDefs).filter((wgslDefs) => wgslDefs.length > 0))];
+  const declarations = solidBindings.map((binding) => (
+    binding.kind === 'uniform'
+      ? `@group(1) @binding(${binding.binding}) var<uniform> ${binding.name}: ${binding.wgslType};`
+      : `@group(1) @binding(${binding.binding}) var<storage, read> ${binding.name}: ${binding.wgslType};`
+  ));
+  return `${defs.join('\n\n')}${defs.length > 0 ? '\n\n' : ''}${declarations.join('\n')}`;
 }
