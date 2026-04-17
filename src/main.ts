@@ -1,6 +1,7 @@
 import './styles.css';
 
-import { dualContourWebGPU, exampleSphereSolidWGSL, type DualContourMetrics } from './dual_contouring';
+import { dualContourWebGPU, exampleSphereSolidWGSL } from './dual_contouring';
+import { marchingCubesWebGPU } from './marching_cubes';
 import { meshToBinarySTL } from './stl';
 import type { Vec3 } from './vec3';
 
@@ -19,13 +20,25 @@ root.innerHTML = `
   <main class="shell">
     <section class="hero">
       <p class="eyebrow">WebGPU Mesher</p>
-      <h1>Dual contour a WGSL solid into STL.</h1>
+      <h1>Turn a WGSL solid into STL.</h1>
       <p class="lede">
-        Define <code>solidOccupancy()</code>, set bounds and grid spacing, then download the repaired mesh as an STL file.
+        Define <code>solidOccupancy()</code>, set bounds and spacing, then export the generated mesh as STL.
       </p>
     </section>
 
     <section class="panel">
+      <fieldset class="mode-picker">
+        <legend>Meshing algorithm</legend>
+        <label class="mode-option">
+          <input id="mode-dual" type="radio" name="meshing-mode" value="dual" checked />
+          <span>Dual Contouring</span>
+        </label>
+        <label class="mode-option">
+          <input id="mode-mc" type="radio" name="meshing-mode" value="mc" />
+          <span>Marching Cubes</span>
+        </label>
+      </fieldset>
+
       <label class="field field-large">
         <span>Solid shader (WGSL)</span>
         <textarea id="solid-wgsl" spellcheck="false"></textarea>
@@ -51,14 +64,22 @@ root.innerHTML = `
           <span>Filename</span>
           <input id="filename" type="text" />
         </label>
-        <label class="toggle">
-          <input id="clip" type="checkbox" />
-          <span>Clip</span>
-        </label>
-        <label class="toggle">
-          <input id="repair" type="checkbox" />
-          <span>CPU repair</span>
-        </label>
+        <div id="dc-options" class="algorithm-options algorithm-options-inline">
+          <label class="toggle">
+            <input id="clip" type="checkbox" />
+            <span>Clip</span>
+          </label>
+          <label class="toggle">
+            <input id="repair" type="checkbox" />
+            <span>CPU repair</span>
+          </label>
+        </div>
+        <div id="mc-options" class="algorithm-options" hidden>
+          <label class="field field-inline">
+            <span>Search iterations</span>
+            <input id="mc-search-iterations" type="number" min="1" step="1" />
+          </label>
+        </div>
         <button id="generate" type="button">Generate STL</button>
       </div>
 
@@ -72,8 +93,13 @@ const boundsMinTextarea = getElement<HTMLTextAreaElement>('bounds-min');
 const boundsMaxTextarea = getElement<HTMLTextAreaElement>('bounds-max');
 const deltaInput = getElement<HTMLInputElement>('delta');
 const filenameInput = getElement<HTMLInputElement>('filename');
+const modeDualInput = getElement<HTMLInputElement>('mode-dual');
+const modeMCInput = getElement<HTMLInputElement>('mode-mc');
+const dcOptions = getElement<HTMLElement>('dc-options');
+const mcOptions = getElement<HTMLElement>('mc-options');
 const clipInput = getElement<HTMLInputElement>('clip');
 const repairInput = getElement<HTMLInputElement>('repair');
+const mcSearchIterationsInput = getElement<HTMLInputElement>('mc-search-iterations');
 const generateButton = getElement<HTMLButtonElement>('generate');
 const statusBox = getElement<HTMLElement>('status');
 
@@ -81,14 +107,19 @@ solidTextarea.value = exampleSphereSolidWGSL.trim();
 boundsMinTextarea.value = '-1.25, -1.25, -1.25';
 boundsMaxTextarea.value = '1.25, 1.25, 1.25';
 deltaInput.value = '0.1';
-filenameInput.value = 'dual-contour-sphere.stl';
+filenameInput.value = 'wgsl-mesh.stl';
 clipInput.checked = false;
 repairInput.checked = true;
+mcSearchIterationsInput.value = '8';
 statusBox.textContent = gpuNavigator.gpu
   ? 'Ready. WebGPU detected.'
   : 'WebGPU is not available in this browser.';
 
 let devicePromise: Promise<any> | null = null;
+updateModeUI();
+
+modeDualInput.addEventListener('change', updateModeUI);
+modeMCInput.addEventListener('change', updateModeUI);
 
 generateButton.addEventListener('click', async () => {
   generateButton.disabled = true;
@@ -109,56 +140,89 @@ generateButton.addEventListener('click', async () => {
       throw new Error('Grid delta must be greater than 0.');
     }
     validateBounds(min, max);
+    const mode = currentMeshingMode();
 
     statusBox.textContent = 'Requesting WebGPU device...';
     const device = await getDevice();
 
     const start = performance.now();
-    statusBox.textContent = 'Running dual contouring on the GPU...';
-    const result = await dualContourWebGPU({
-      device,
-      solidWGSL,
-      min,
-      max,
-      delta,
-      clip: clipInput.checked,
-      repair: repairInput.checked,
-      label: 'webui-dual-contour',
-    });
-    logDualContourMetrics('webui-dual-contour', result.metrics);
+    let meshLabel = 'generated';
+    let mesh;
+    if (mode === 'dual') {
+      statusBox.textContent = 'Running dual contouring on the GPU...';
+      const result = await dualContourWebGPU({
+        device,
+        solidWGSL,
+        min,
+        max,
+        delta,
+        clip: clipInput.checked,
+        repair: repairInput.checked,
+        label: 'webui-dual-contour',
+      });
+      logStageMetrics('webui-dual-contour', result.metrics);
 
-    const initialTriangleCount = result.initial.indices.length / 3;
-    const initialVertexCount = result.initial.positions.length / 3;
-    const repairedTriangleCount = result.repaired.indices.length / 3;
-    const repairedVertexCount = result.repaired.positions.length / 3;
+      const initialTriangleCount = result.initial.indices.length / 3;
+      const initialVertexCount = result.initial.positions.length / 3;
+      const repairedTriangleCount = result.repaired.indices.length / 3;
+      const repairedVertexCount = result.repaired.positions.length / 3;
 
-    let mesh = result.repaired;
-    let meshLabel = repairInput.checked ? 'repaired' : 'initial';
-    if (repairInput.checked && repairedTriangleCount === 0 && initialTriangleCount > 0) {
-      mesh = result.initial;
-      meshLabel = 'initial';
+      mesh = result.repaired;
+      meshLabel = repairInput.checked ? 'repaired' : 'initial';
+      if (repairInput.checked && repairedTriangleCount === 0 && initialTriangleCount > 0) {
+        mesh = result.initial;
+        meshLabel = 'initial';
+        statusBox.textContent =
+          `Repair produced 0 triangles, falling back to the initial mesh.\n` +
+          `Initial: ${initialTriangleCount} triangles / ${initialVertexCount} vertices.\n` +
+          `Repaired: ${repairedTriangleCount} triangles / ${repairedVertexCount} vertices.`;
+      }
+
+      const triangleCount = mesh.indices.length / 3;
+      const vertexCount = mesh.positions.length / 3;
+      if (triangleCount === 0 || vertexCount === 0) {
+        throw new Error(
+          `No triangles were generated.\n` +
+          `Initial: ${initialTriangleCount} triangles / ${initialVertexCount} vertices.\n` +
+          `Repaired: ${repairedTriangleCount} triangles / ${repairedVertexCount} vertices.\n` +
+          `Check the shader, bounds, delta, or the repair option.`
+        );
+      }
+
       statusBox.textContent =
-        `Repair produced 0 triangles, falling back to the initial mesh.\n` +
+        `Using the ${meshLabel} mesh.\n` +
         `Initial: ${initialTriangleCount} triangles / ${initialVertexCount} vertices.\n` +
-        `Repaired: ${repairedTriangleCount} triangles / ${repairedVertexCount} vertices.`;
+        `Repaired: ${repairedTriangleCount} triangles / ${repairedVertexCount} vertices.\n` +
+        `Building STL...`;
+    } else {
+      const searchIterations = parseIntegerInput(mcSearchIterationsInput.value, 'Search iterations', 1);
+      statusBox.textContent = 'Running marching cubes on the GPU...';
+      const result = await marchingCubesWebGPU({
+        device,
+        solidWGSL,
+        min,
+        max,
+        delta,
+        bisectionSteps: searchIterations,
+        label: 'webui-marching-cubes',
+      });
+      logStageMetrics('webui-marching-cubes', result.metrics);
+      mesh = result.mesh.compact();
+      const triangleCount = mesh.indices.length / 3;
+      const vertexCount = mesh.positions.length / 3;
+      if (triangleCount === 0 || vertexCount === 0) {
+        throw new Error(
+          `No triangles were generated.\n` +
+          `Check the shader, bounds, delta, or the search-iteration setting.`
+        );
+      }
+      statusBox.textContent =
+        `Marching cubes generated ${triangleCount} triangles / ${vertexCount} vertices.\n` +
+        `Building STL...`;
     }
 
     const triangleCount = mesh.indices.length / 3;
     const vertexCount = mesh.positions.length / 3;
-    if (triangleCount === 0 || vertexCount === 0) {
-      throw new Error(
-        `No triangles were generated.\n` +
-        `Initial: ${initialTriangleCount} triangles / ${initialVertexCount} vertices.\n` +
-        `Repaired: ${repairedTriangleCount} triangles / ${repairedVertexCount} vertices.\n` +
-        `Check the shader, bounds, delta, or the repair option.`
-      );
-    }
-
-    statusBox.textContent =
-      `Using the ${meshLabel} mesh.\n` +
-      `Initial: ${initialTriangleCount} triangles / ${initialVertexCount} vertices.\n` +
-      `Repaired: ${repairedTriangleCount} triangles / ${repairedVertexCount} vertices.\n` +
-      `Building STL...`;
     const blob = meshToBinarySTL(mesh, sanitizeSolidName(filenameInput.value));
     downloadBlob(blob, normalizeFilename(filenameInput.value));
     const durationMs = Math.round(performance.now() - start);
@@ -229,6 +293,14 @@ function validateBounds(min: Vec3, max: Vec3): void {
   }
 }
 
+function parseIntegerInput(value: string, label: string, min: number): number {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < min) {
+    throw new Error(`${label} must be an integer greater than or equal to ${min}.`);
+  }
+  return number;
+}
+
 function normalizeFilename(value: string): string {
   const trimmed = value.trim() || 'dual-contour-mesh';
   return trimmed.toLowerCase().endsWith('.stl') ? trimmed : `${trimmed}.stl`;
@@ -256,7 +328,18 @@ function formatError(error: unknown): string {
   return `${error}`;
 }
 
-function logDualContourMetrics(label: string, metrics: DualContourMetrics): void {
+function currentMeshingMode(): 'dual' | 'mc' {
+  return modeMCInput.checked ? 'mc' : 'dual';
+}
+
+function updateModeUI(): void {
+  const mode = currentMeshingMode();
+  const isDual = mode === 'dual';
+  dcOptions.hidden = !isDual;
+  mcOptions.hidden = isDual;
+}
+
+function logStageMetrics(label: string, metrics: { totalMs: number; stages: Array<{ stage: string; ms: number }> }): void {
   let cumulative = 0;
   const rows = metrics.stages.map(({ stage, ms }) => {
     cumulative += ms;

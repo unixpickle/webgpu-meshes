@@ -25,6 +25,10 @@ textarea {
   font: inherit;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 code,
 textarea,
 input,
@@ -84,12 +88,66 @@ input,
   gap: 16px;
 }
 
+.mode-picker {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin: 0 0 16px;
+  padding: 0;
+  border: 0;
+}
+
+.mode-picker legend {
+  margin-bottom: 10px;
+  padding: 0;
+  color: #dcb48f;
+  font-size: 0.88rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.mode-option {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+  border: 1px solid rgba(243, 237, 226, 0.16);
+  border-radius: 16px;
+  background: rgba(12, 11, 10, 0.48);
+  cursor: pointer;
+}
+
+.mode-option input {
+  width: 18px;
+  height: 18px;
+  margin: 0 0 4px;
+}
+
+.mode-option span {
+  color: #f6f0e7;
+  font-size: 0.96rem;
+  font-weight: 700;
+}
+
 .controls {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr)) auto auto;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) minmax(0, 1.25fr) auto;
   gap: 16px;
   margin-top: 16px;
   align-items: end;
+}
+
+.algorithm-options {
+  display: grid;
+  gap: 12px;
+  align-items: end;
+}
+
+.algorithm-options-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  min-height: 52px;
+  align-items: center;
 }
 
 .field {
@@ -126,7 +184,8 @@ input,
 }
 
 textarea,
-input {
+input[type="text"],
+input[type="number"] {
   width: 100%;
   border: 1px solid rgba(243, 237, 226, 0.18);
   border-radius: 16px;
@@ -147,7 +206,8 @@ textarea {
 }
 
 textarea:focus,
-input:focus {
+input[type="text"]:focus,
+input[type="number"]:focus {
   border-color: #e26b4a;
   background: rgba(20, 18, 16, 0.92);
   transform: translateY(-1px);
