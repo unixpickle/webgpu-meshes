@@ -44,6 +44,11 @@ root.innerHTML = `
         <textarea id="solid-wgsl" spellcheck="false"></textarea>
       </label>
 
+      <label class="field field-large">
+        <span>Buffers (JSON)</span>
+        <textarea id="buffers-json" rows="4" spellcheck="false"></textarea>
+      </label>
+
       <div class="grid">
         <label class="field">
           <span>Bounding box min</span>
@@ -89,6 +94,7 @@ root.innerHTML = `
 `;
 
 const solidTextarea = getElement<HTMLTextAreaElement>('solid-wgsl');
+const buffersTextarea = getElement<HTMLTextAreaElement>('buffers-json');
 const boundsMinTextarea = getElement<HTMLTextAreaElement>('bounds-min');
 const boundsMaxTextarea = getElement<HTMLTextAreaElement>('bounds-max');
 const deltaInput = getElement<HTMLInputElement>('delta');
@@ -104,6 +110,7 @@ const generateButton = getElement<HTMLButtonElement>('generate');
 const statusBox = getElement<HTMLElement>('status');
 
 solidTextarea.value = exampleSphereSolidWGSL.trim();
+buffersTextarea.value = '{}';
 boundsMinTextarea.value = '-1.25, -1.25, -1.25';
 boundsMaxTextarea.value = '1.25, 1.25, 1.25';
 deltaInput.value = '0.1';
@@ -132,6 +139,7 @@ generateButton.addEventListener('click', async () => {
     if (!solidWGSL) {
       throw new Error('Enter WGSL source for solidOccupancy().');
     }
+    const solidBindings = parseSolidBindingsJSON(buffersTextarea.value);
 
     const min = parseVec3(boundsMinTextarea.value, 'Bounding box min');
     const max = parseVec3(boundsMaxTextarea.value, 'Bounding box max');
@@ -153,6 +161,7 @@ generateButton.addEventListener('click', async () => {
       const result = await dualContourWebGPU({
         device,
         solidWGSL,
+        solidBindings,
         min,
         max,
         delta,
@@ -200,6 +209,7 @@ generateButton.addEventListener('click', async () => {
       const result = await marchingCubesWebGPU({
         device,
         solidWGSL,
+        solidBindings,
         min,
         max,
         delta,
@@ -299,6 +309,56 @@ function parseIntegerInput(value: string, label: string, min: number): number {
     throw new Error(`${label} must be an integer greater than or equal to ${min}.`);
   }
   return number;
+}
+
+function parseSolidBindingsJSON(value: string): Array<{
+  name: string;
+  kind: 'storage';
+  wgslType: 'array<f32>';
+  source: Float32Array;
+}> {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return [];
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch (error) {
+    throw new Error(`Buffers must be valid JSON. ${formatError(error)}`);
+  }
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('Buffers must be a JSON object mapping buffer names to float arrays.');
+  }
+
+  const result: Array<{
+    name: string;
+    kind: 'storage';
+    wgslType: 'array<f32>';
+    source: Float32Array;
+  }> = [];
+
+  for (const [name, rawValue] of Object.entries(parsed as Record<string, unknown>)) {
+    if (!Array.isArray(rawValue)) {
+      throw new Error(`Buffer "${name}" must be an array of numbers.`);
+    }
+    const numbers = rawValue.map((item) => {
+      if (typeof item !== 'number' || !Number.isFinite(item)) {
+        throw new Error(`Buffer "${name}" contains a non-finite value.`);
+      }
+      return item;
+    });
+    result.push({
+      name,
+      kind: 'storage',
+      wgslType: 'array<f32>',
+      source: new Float32Array(numbers),
+    });
+  }
+
+  return result;
 }
 
 function normalizeFilename(value: string): string {
