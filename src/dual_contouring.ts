@@ -334,60 +334,85 @@ export async function dualContourWebGPU(options: DualContouringWebGPUOptions): P
   const solidBindGroupLayout = solidBindings.length === 0 ? null : createSolidBindGroupLayout(device, solidBindings);
 
   const shaders = buildShaderBundle(config.solidWGSL, solidBindings, workgroupSize);
-  const cornerPipeline = device.createComputePipeline({
+  const [
+    cornerModule,
+    xEdgeModule,
+    yEdgeModule,
+    zEdgeModule,
+    cubeModule,
+    countXModule,
+    countYModule,
+    countZModule,
+    emitXModule,
+    emitYModule,
+    emitZModule,
+  ] = await Promise.all([
+    createCheckedShaderModule(device, `${config.label}-corner-shader`, shaders.corner),
+    createCheckedShaderModule(device, `${config.label}-x-edge-shader`, shaders.edgeX),
+    createCheckedShaderModule(device, `${config.label}-y-edge-shader`, shaders.edgeY),
+    createCheckedShaderModule(device, `${config.label}-z-edge-shader`, shaders.edgeZ),
+    createCheckedShaderModule(device, `${config.label}-cube-shader`, shaders.cube),
+    createCheckedShaderModule(device, `${config.label}-count-x-shader`, shaders.countX),
+    createCheckedShaderModule(device, `${config.label}-count-y-shader`, shaders.countY),
+    createCheckedShaderModule(device, `${config.label}-count-z-shader`, shaders.countZ),
+    createCheckedShaderModule(device, `${config.label}-emit-x-shader`, shaders.emitX),
+    createCheckedShaderModule(device, `${config.label}-emit-y-shader`, shaders.emitY),
+    createCheckedShaderModule(device, `${config.label}-emit-z-shader`, shaders.emitZ),
+  ]);
+  const cornerPipeline = await device.createComputePipelineAsync({
     label: `${config.label}-corner-pipeline`,
     layout: createPipelineLayout(device, cornerBindGroupLayout, solidBindGroupLayout),
-    compute: { module: device.createShaderModule({ code: shaders.corner }), entryPoint: 'main' },
+    compute: { module: cornerModule, entryPoint: 'main' },
   });
-  const xEdgePipeline = device.createComputePipeline({
+  const xEdgePipeline = await device.createComputePipelineAsync({
     label: `${config.label}-x-edge-pipeline`,
     layout: createPipelineLayout(device, edgeBindGroupLayout, solidBindGroupLayout),
-    compute: { module: device.createShaderModule({ code: shaders.edgeX }), entryPoint: 'main' },
+    compute: { module: xEdgeModule, entryPoint: 'main' },
   });
-  const yEdgePipeline = device.createComputePipeline({
+  const yEdgePipeline = await device.createComputePipelineAsync({
     label: `${config.label}-y-edge-pipeline`,
     layout: createPipelineLayout(device, edgeBindGroupLayout, solidBindGroupLayout),
-    compute: { module: device.createShaderModule({ code: shaders.edgeY }), entryPoint: 'main' },
+    compute: { module: yEdgeModule, entryPoint: 'main' },
   });
-  const zEdgePipeline = device.createComputePipeline({
+  const zEdgePipeline = await device.createComputePipelineAsync({
     label: `${config.label}-z-edge-pipeline`,
     layout: createPipelineLayout(device, edgeBindGroupLayout, solidBindGroupLayout),
-    compute: { module: device.createShaderModule({ code: shaders.edgeZ }), entryPoint: 'main' },
+    compute: { module: zEdgeModule, entryPoint: 'main' },
   });
-  const cubePipeline = device.createComputePipeline({
+  const cubePipeline = await device.createComputePipelineAsync({
     label: `${config.label}-cube-pipeline`,
     layout: createPipelineLayout(device, cubeBindGroupLayout, solidBindGroupLayout),
-    compute: { module: device.createShaderModule({ code: shaders.cube }), entryPoint: 'main' },
+    compute: { module: cubeModule, entryPoint: 'main' },
   });
-  const countXPipeline = device.createComputePipeline({
+  const countXPipeline = await device.createComputePipelineAsync({
     label: `${config.label}-count-x-pipeline`,
     layout: createPipelineLayout(device, countBindGroupLayout),
-    compute: { module: device.createShaderModule({ code: shaders.countX }), entryPoint: 'main' },
+    compute: { module: countXModule, entryPoint: 'main' },
   });
-  const countYPipeline = device.createComputePipeline({
+  const countYPipeline = await device.createComputePipelineAsync({
     label: `${config.label}-count-y-pipeline`,
     layout: createPipelineLayout(device, countBindGroupLayout),
-    compute: { module: device.createShaderModule({ code: shaders.countY }), entryPoint: 'main' },
+    compute: { module: countYModule, entryPoint: 'main' },
   });
-  const countZPipeline = device.createComputePipeline({
+  const countZPipeline = await device.createComputePipelineAsync({
     label: `${config.label}-count-z-pipeline`,
     layout: createPipelineLayout(device, countBindGroupLayout),
-    compute: { module: device.createShaderModule({ code: shaders.countZ }), entryPoint: 'main' },
+    compute: { module: countZModule, entryPoint: 'main' },
   });
-  const emitXPipeline = device.createComputePipeline({
+  const emitXPipeline = await device.createComputePipelineAsync({
     label: `${config.label}-emit-x-pipeline`,
     layout: createPipelineLayout(device, emitBindGroupLayout),
-    compute: { module: device.createShaderModule({ code: shaders.emitX }), entryPoint: 'main' },
+    compute: { module: emitXModule, entryPoint: 'main' },
   });
-  const emitYPipeline = device.createComputePipeline({
+  const emitYPipeline = await device.createComputePipelineAsync({
     label: `${config.label}-emit-y-pipeline`,
     layout: createPipelineLayout(device, emitBindGroupLayout),
-    compute: { module: device.createShaderModule({ code: shaders.emitY }), entryPoint: 'main' },
+    compute: { module: emitYModule, entryPoint: 'main' },
   });
-  const emitZPipeline = device.createComputePipeline({
+  const emitZPipeline = await device.createComputePipelineAsync({
     label: `${config.label}-emit-z-pipeline`,
     layout: createPipelineLayout(device, emitBindGroupLayout),
-    compute: { module: device.createShaderModule({ code: shaders.emitZ }), entryPoint: 'main' },
+    compute: { module: emitZModule, entryPoint: 'main' },
   });
   markStage('build shaders + pipelines');
 
@@ -885,6 +910,33 @@ function createPipelineLayout(device: any, primaryLayout: any, solidBindGroupLay
   return device.createPipelineLayout({
     bindGroupLayouts: solidBindGroupLayout ? [primaryLayout, solidBindGroupLayout] : [primaryLayout],
   });
+}
+
+async function createCheckedShaderModule(device: any, label: string, code: string): Promise<any> {
+  const module = device.createShaderModule({ label, code });
+  if (typeof module.getCompilationInfo !== 'function') {
+    return module;
+  }
+  const info = await module.getCompilationInfo();
+  const errors = (info.messages as Array<any>).filter((message) => message.type === 'error');
+  if (errors.length === 0) {
+    return module;
+  }
+  throw new Error(formatShaderCompilationError(label, errors));
+}
+
+function formatShaderCompilationError(label: string, errors: Array<any>): string {
+  const lines = [`WGSL compilation failed for ${label}:`];
+  for (const error of errors.slice(0, 8)) {
+    const location = typeof error.lineNum === 'number'
+      ? `line ${error.lineNum}${typeof error.linePos === 'number' ? `:${error.linePos}` : ''}`
+      : 'unknown location';
+    lines.push(`${location}: ${String(error.message ?? 'Unknown shader compilation error.')}`);
+  }
+  if (errors.length > 8) {
+    lines.push(`...and ${errors.length - 8} more errors.`);
+  }
+  return lines.join('\n');
 }
 
 function assertBufferFits(

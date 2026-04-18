@@ -224,35 +224,43 @@ export async function marchingCubesWebGPU(options: MarchingCubesWebGPUOptions): 
   const solidBindGroupLayout = solidBindings.length === 0 ? null : createSolidBindGroupLayout(device, solidBindings);
 
   const shaders = buildShaderBundle(config.solidWGSL, solidBindings, workgroupSize);
-  const cornerPipeline = device.createComputePipeline({
+  const [cornerModule, xEdgeModule, yEdgeModule, zEdgeModule, countModule, emitModule] = await Promise.all([
+    createCheckedShaderModule(device, `${config.label}-mc-corner-shader`, shaders.corner),
+    createCheckedShaderModule(device, `${config.label}-mc-x-edge-shader`, shaders.edgeX),
+    createCheckedShaderModule(device, `${config.label}-mc-y-edge-shader`, shaders.edgeY),
+    createCheckedShaderModule(device, `${config.label}-mc-z-edge-shader`, shaders.edgeZ),
+    createCheckedShaderModule(device, `${config.label}-mc-count-shader`, shaders.count),
+    createCheckedShaderModule(device, `${config.label}-mc-emit-shader`, shaders.emit),
+  ]);
+  const cornerPipeline = await device.createComputePipelineAsync({
     label: `${config.label}-mc-corner-pipeline`,
     layout: createPipelineLayout(device, cornerBindGroupLayout, solidBindGroupLayout),
-    compute: { module: device.createShaderModule({ code: shaders.corner }), entryPoint: 'main' },
+    compute: { module: cornerModule, entryPoint: 'main' },
   });
-  const xEdgePipeline = device.createComputePipeline({
+  const xEdgePipeline = await device.createComputePipelineAsync({
     label: `${config.label}-mc-x-edge-pipeline`,
     layout: createPipelineLayout(device, edgeBindGroupLayout, solidBindGroupLayout),
-    compute: { module: device.createShaderModule({ code: shaders.edgeX }), entryPoint: 'main' },
+    compute: { module: xEdgeModule, entryPoint: 'main' },
   });
-  const yEdgePipeline = device.createComputePipeline({
+  const yEdgePipeline = await device.createComputePipelineAsync({
     label: `${config.label}-mc-y-edge-pipeline`,
     layout: createPipelineLayout(device, edgeBindGroupLayout, solidBindGroupLayout),
-    compute: { module: device.createShaderModule({ code: shaders.edgeY }), entryPoint: 'main' },
+    compute: { module: yEdgeModule, entryPoint: 'main' },
   });
-  const zEdgePipeline = device.createComputePipeline({
+  const zEdgePipeline = await device.createComputePipelineAsync({
     label: `${config.label}-mc-z-edge-pipeline`,
     layout: createPipelineLayout(device, edgeBindGroupLayout, solidBindGroupLayout),
-    compute: { module: device.createShaderModule({ code: shaders.edgeZ }), entryPoint: 'main' },
+    compute: { module: zEdgeModule, entryPoint: 'main' },
   });
-  const countPipeline = device.createComputePipeline({
+  const countPipeline = await device.createComputePipelineAsync({
     label: `${config.label}-mc-count-pipeline`,
     layout: createPipelineLayout(device, countBindGroupLayout),
-    compute: { module: device.createShaderModule({ code: shaders.count }), entryPoint: 'main' },
+    compute: { module: countModule, entryPoint: 'main' },
   });
-  const emitPipeline = device.createComputePipeline({
+  const emitPipeline = await device.createComputePipelineAsync({
     label: `${config.label}-mc-emit-pipeline`,
     layout: createPipelineLayout(device, emitBindGroupLayout),
-    compute: { module: device.createShaderModule({ code: shaders.emit }), entryPoint: 'main' },
+    compute: { module: emitModule, entryPoint: 'main' },
   });
   markStage('build shaders + pipelines');
 
@@ -635,6 +643,33 @@ function createPipelineLayout(device: any, primaryLayout: any, solidBindGroupLay
   return device.createPipelineLayout({
     bindGroupLayouts: solidBindGroupLayout ? [primaryLayout, solidBindGroupLayout] : [primaryLayout],
   });
+}
+
+async function createCheckedShaderModule(device: any, label: string, code: string): Promise<any> {
+  const module = device.createShaderModule({ label, code });
+  if (typeof module.getCompilationInfo !== 'function') {
+    return module;
+  }
+  const info = await module.getCompilationInfo();
+  const errors = (info.messages as Array<any>).filter((message) => message.type === 'error');
+  if (errors.length === 0) {
+    return module;
+  }
+  throw new Error(formatShaderCompilationError(label, errors));
+}
+
+function formatShaderCompilationError(label: string, errors: Array<any>): string {
+  const lines = [`WGSL compilation failed for ${label}:`];
+  for (const error of errors.slice(0, 8)) {
+    const location = typeof error.lineNum === 'number'
+      ? `line ${error.lineNum}${typeof error.linePos === 'number' ? `:${error.linePos}` : ''}`
+      : 'unknown location';
+    lines.push(`${location}: ${String(error.message ?? 'Unknown shader compilation error.')}`);
+  }
+  if (errors.length > 8) {
+    lines.push(`...and ${errors.length - 8} more errors.`);
+  }
+  return lines.join('\n');
 }
 
 function assertBufferFits(
