@@ -2,10 +2,17 @@ package shapekernel
 
 import (
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 )
 
 type ShapeKind int
+
+var offsetRegexps = map[string]*regexp.Regexp{
+	"sym_fn_":  regexp.MustCompile("sym_fn_([0-9]*)_"),
+	"sym_buf_": regexp.MustCompile("sym_buf_([0-9]*)_"),
+}
 
 const (
 	Solid2D ShapeKind = iota
@@ -60,24 +67,37 @@ type ShapeKernel struct {
 // to start at the new given offsets.
 func ShiftIDs(k ShapeKernel, offsets IDTracker) ShapeKernel {
 	k.Buffers = append([]Buffer{}, k.Buffers...)
-	for i := k.IDs.NextBufferID - 1; i >= 0; i-- {
-		old := fmt.Sprintf("sym_buf_%d_", i)
-		repl := fmt.Sprintf("sym_buf_%d_", i+offsets.NextBufferID)
-		k.Code = strings.ReplaceAll(k.Code, old, repl)
+	if offsets.NextBufferID > 0 {
+		k.Code = offsetSymbolNumbers(k.Code, "sym_buf_", offsets.NextBufferID)
 		for i, b := range k.Buffers {
-			b.Name = strings.ReplaceAll(b.Name, old, repl)
+			b.Name = offsetSymbolNumbers(b.Name, "sym_buf_", offsets.NextBufferID)
 			k.Buffers[i] = b
 		}
 	}
-	for i := k.IDs.NextFnID - 1; i >= 0; i-- {
-		old := fmt.Sprintf("sym_fn_%d_", i)
-		repl := fmt.Sprintf("sym_fn_%d_", i+offsets.NextFnID)
-		k.Code = strings.ReplaceAll(k.Code, old, repl)
-		k.EntrypointName = strings.ReplaceAll(k.EntrypointName, old, repl)
-	}
+	k.Code = offsetSymbolNumbers(k.Code, "sym_fn_", offsets.NextFnID)
+	k.EntrypointName = offsetSymbolNumbers(k.EntrypointName, "sym_fn_", offsets.NextFnID)
 	k.IDs.NextBufferID += offsets.NextBufferID
 	k.IDs.NextFnID += offsets.NextFnID
 	return k
+}
+
+func offsetSymbolNumbers(code string, prefix string, offset int) string {
+	expr := offsetRegexps[prefix]
+	matches := expr.FindAllStringSubmatchIndex(code, -1)
+	parts := make([]string, 0, len(matches)*2+1)
+	lastEnd := 0
+	for _, submatch := range matches {
+		parts = append(parts, code[lastEnd:submatch[0]])
+		lastEnd = submatch[1]
+
+		idx, err := strconv.Atoi(code[submatch[2]:submatch[3]])
+		if err != nil {
+			panic(err)
+		}
+		parts = append(parts, prefix+strconv.Itoa(idx+offset)+"_")
+	}
+	parts = append(parts, code[lastEnd:])
+	return strings.Join(parts, "")
 }
 
 func genFunctionID(idt *IDTracker, name string) string {

@@ -2,30 +2,53 @@ package shapekernel
 
 import (
 	"fmt"
+	"strings"
 )
 
-func UnionSolid(k1, k2 ShapeKernel) ShapeKernel {
-	if k1.Kind != k2.Kind {
-		panic("mismatching kinds passed to UnionSolid()")
+// UnionSolids takes the union of one or more solids.
+func UnionSolids(solids []ShapeKernel) ShapeKernel {
+	return solidBooleanOp(solids, "||", "union")
+}
+
+// IntersectSolids takes the intersection of one or more solids.
+func IntersectSolids(solids []ShapeKernel) ShapeKernel {
+	return solidBooleanOp(solids, "&&", "intersection")
+}
+
+func solidBooleanOp(solids []ShapeKernel, op, name string) ShapeKernel {
+	if len(solids) == 0 {
+		panic("expected at least one solid")
+	} else if len(solids) == 1 {
+		return solids[0]
 	}
-	k2 = ShiftIDs(k2, k1.IDs)
 
-	k := k1
-	k.Buffers = append(append([]Buffer{}, k1.Buffers...), k2.Buffers...)
-	k.Code += "\n" + k2.Code
-	k.IDs = k2.IDs
+	for i := 1; i < len(solids); i++ {
+		if solids[i].Kind != solids[0].Kind {
+			panic("mismatching shape kinds")
+		}
+	}
 
-	fnName := genFunctionID(&k.IDs, "union_solid")
+	k := solids[0]
+	k.Buffers = append([]Buffer{}, k.Buffers...)
+	orCode := []string{fmt.Sprintf("%s(p)", k.EntrypointName)}
+	for i := 1; i < len(solids); i++ {
+		nextK := ShiftIDs(solids[i], k.IDs)
+		k.IDs = nextK.IDs
+		k.Buffers = append(k.Buffers, nextK.Buffers...)
+		k.Code += "\n" + nextK.Code
+		orCode = append(orCode, fmt.Sprintf("%s(p)", nextK.EntrypointName))
+	}
+
+	fnName := genFunctionID(&k.IDs, name+"_solid")
 	k.Code += "\n" + fmt.Sprintf(
 		Dedent(`
 			fn %s(p: %s) -> bool {
-				return %s(p) || %s(p);
+				return %s;
 			}
 		`),
 		fnName,
 		k.Kind.ArgType(),
-		k1.EntrypointName,
-		k2.EntrypointName,
+		strings.Join(orCode, " "+op+" "),
 	)
 	k.EntrypointName = fnName
 	return k
