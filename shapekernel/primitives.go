@@ -23,3 +23,23 @@ func SphereSolid(r float32) ShapeKernel {
 		EntrypointName: entrypointName,
 	}
 }
+
+func SphereSDF(r float32) ShapeKernel {
+	ids := IDTracker{}
+	entrypointName := genFunctionID(&ids, "sphere_sdf")
+	return ShapeKernel{
+		Kind: SDF3D,
+		IDs:  ids,
+		Code: fmt.Sprintf(
+			Dedent(`
+				fn %s(p: vec3<f32>) -> f32 {
+					let center = vec3<f32>(0.0, 0.0, 0.0);
+					return %f - distance(p, center);
+				}
+			`),
+			entrypointName,
+			r,
+		),
+		EntrypointName: entrypointName,
+	}
+}

@@ -12,6 +12,10 @@ func (v Vec2) Dim() int {
 	return 2
 }
 
+func (v Vec2) At(i int) float32 {
+	return v[i]
+}
+
 type Vec3 [3]float32
 
 func (v Vec3) WebGPUVec() string {
@@ -22,7 +26,12 @@ func (v Vec3) Dim() int {
 	return 3
 }
 
+func (v Vec3) At(i int) float32 {
+	return v[i]
+}
+
 type Vector interface {
 	Dim() int
 	WebGPUVec() string
+	At(i int) float32
 }
