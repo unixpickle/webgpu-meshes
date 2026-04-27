@@ -72,3 +72,46 @@ func Mesh2DSolid(m2 *model2d.Mesh) ShapeKernel {
 		EntrypointName: entrypointName,
 	}
 }
+
+// Mesh2DSDF creates an SDF by combining the segment distance with the
+// inside/outside test from Mesh2DSolid.
+func Mesh2DSDF(m2 *model2d.Mesh) ShapeKernel {
+	solidKernel := Mesh2DSolid(m2)
+	bufName := solidKernel.Buffers[0].Name
+	entrypointName := genFunctionID(&solidKernel.IDs, "mesh2d_sdf")
+
+	return ShapeKernel{
+		Kind:    SDF2D,
+		IDs:     solidKernel.IDs,
+		Buffers: append([]Buffer{}, solidKernel.Buffers...),
+		Code: solidKernel.Code + "\n" + Dedent(fmt.Sprintf(`
+			fn %s(p: vec2<f32>) -> f32 {
+				let numSegs = %du;
+				if (numSegs == 0u) {
+					return 0.0;
+				}
+
+				var minDist = 1e30;
+				for (var i = 0u; i < numSegs; i++) {
+					let p1 = vec2<f32>(%s[i*4], %s[i*4+1]);
+					let p2 = vec2<f32>(%s[i*4+2], %s[i*4+3]);
+					let v = p2 - p1;
+					let vNormSq = dot(v, v);
+					var t = 0.0;
+					if (vNormSq > 0.0) {
+						t = clamp(dot(p - p1, v) / vNormSq, 0.0, 1.0);
+					}
+					let closest = p1 + t * v;
+					minDist = min(minDist, distance(p, closest));
+				}
+
+				if (%s(p)) {
+					return minDist;
+				} else {
+					return -minDist;
+				}
+			}
+		`, entrypointName, m2.NumSegments(), bufName, bufName, bufName, bufName, solidKernel.EntrypointName)),
+		EntrypointName: entrypointName,
+	}
+}

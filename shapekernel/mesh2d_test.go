@@ -37,3 +37,29 @@ func TestMesh2DSolid(t *testing.T) {
 	vals := ExecuteShapeKernel(t, kernel, inputPoints...)
 	vals.ExpectBools(t, expected)
 }
+
+func TestMesh2DSDF(t *testing.T) {
+	rng := rand.New(rand.NewSource(0))
+	sourceSolid := model2d.JoinedSolid{}
+	for i := 0; i < 15; i++ {
+		center := model2d.NewCoordRandNorm(rng)
+		sourceSolid = append(
+			sourceSolid,
+			&model2d.Circle{Center: center, Radius: rng.Float64()/3 + 0.1},
+		)
+	}
+	mesh := model2d.MarchingSquaresSearch(sourceSolid, 0.01, 8)
+	kernel := Mesh2DSDF(mesh)
+	meshSDF := model2d.MeshToSDF(mesh)
+
+	var inputPoints []Vector
+	var expected []float32
+	for i := 0; i < 1024; i++ {
+		point := model2d.NewCoordRandNorm(rng).Scale(1.3)
+		sdf := meshSDF.SDF(point)
+		inputPoints = append(inputPoints, Vec2{float32(point.X), float32(point.Y)})
+		expected = append(expected, float32(sdf))
+	}
+	vals := ExecuteShapeKernel(t, kernel, inputPoints...)
+	vals.ExpectFloats(t, expected, 1e-4)
+}
