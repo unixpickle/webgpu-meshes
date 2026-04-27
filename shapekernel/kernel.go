@@ -19,27 +19,33 @@ const (
 	Solid3D
 	SDF2D
 	SDF3D
+	Metaball2D
+	Metaball3D
+	FalloffFunc
 )
 
 func (s ShapeKind) ReturnType() string {
 	switch s {
 	case Solid2D, Solid3D:
 		return "bool"
-	case SDF2D, SDF3D:
+	case SDF2D, SDF3D, Metaball2D, Metaball3D, FalloffFunc:
 		return "f32"
 	}
 	panic("unknown ShapeKind")
 }
 
 func (s ShapeKind) ArgType() string {
+	if s == FalloffFunc {
+		return "f32"
+	}
 	return fmt.Sprintf("vec%d<f32>", s.Dim())
 }
 
 func (s ShapeKind) Dim() int {
 	switch s {
-	case Solid2D, SDF2D:
+	case Solid2D, SDF2D, Metaball2D:
 		return 2
-	case Solid3D, SDF3D:
+	case Solid3D, SDF3D, Metaball3D:
 		return 3
 	}
 	panic("unknown ShapeKind")

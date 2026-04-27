@@ -6,6 +6,9 @@ import (
 )
 
 func Translate(k ShapeKernel, offset Vector) ShapeKernel {
+	if k.Kind == FalloffFunc {
+		panic("cannot translate falloff functions")
+	}
 	fnName := genFunctionID(&k.IDs, "translate")
 	k.Code += "\n" + fmt.Sprintf(
 		Dedent(`
@@ -25,6 +28,9 @@ func Translate(k ShapeKernel, offset Vector) ShapeKernel {
 }
 
 func Scale(k ShapeKernel, scales Vector) ShapeKernel {
+	if k.Kind == FalloffFunc {
+		panic("cannot scale falloff functions")
+	}
 	scaleCode := ""
 	if k.Kind == SDF2D || k.Kind == SDF3D {
 		scaleCode = fmt.Sprintf(" / %f", math.Abs(float64(scales.At(0))))
@@ -33,7 +39,7 @@ func Scale(k ShapeKernel, scales Vector) ShapeKernel {
 	k.Code += "\n" + fmt.Sprintf(
 		Dedent(`
 			fn %s(p: %s) -> %s {
-				let newP = p / %s
+				let newP = p / %s;
 				return %s(newP)%s;
 			}
 		`),

@@ -123,7 +123,7 @@ func ExecuteShapeKernel(t testing.TB, k ShapeKernel, inputs ...Vector) KernelExe
 		if len(result.Bools) != len(inputs) {
 			t.Fatalf("executor returned %d bool results for %d inputs", len(result.Bools), len(inputs))
 		}
-	case SDF2D, SDF3D:
+	case SDF2D, SDF3D, Metaball2D, Metaball3D:
 		if len(result.Floats) != len(inputs) {
 			t.Fatalf("executor returned %d float results for %d inputs", len(result.Floats), len(inputs))
 		}
