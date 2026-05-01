@@ -25,6 +25,48 @@ type primitive3D interface {
 	SDF(model3d.Coord3D) float64
 }
 
+type solidSDF2D struct {
+	solid model2d.Solid
+	sdf   model2d.SDF
+}
+
+func (s solidSDF2D) Min() model2d.Coord {
+	return s.solid.Min()
+}
+
+func (s solidSDF2D) Max() model2d.Coord {
+	return s.solid.Max()
+}
+
+func (s solidSDF2D) Contains(c model2d.Coord) bool {
+	return s.solid.Contains(c)
+}
+
+func (s solidSDF2D) SDF(c model2d.Coord) float64 {
+	return s.sdf.SDF(c)
+}
+
+type solidSDF3D struct {
+	solid model3d.Solid
+	sdf   model3d.SDF
+}
+
+func (s solidSDF3D) Min() model3d.Coord3D {
+	return s.solid.Min()
+}
+
+func (s solidSDF3D) Max() model3d.Coord3D {
+	return s.solid.Max()
+}
+
+func (s solidSDF3D) Contains(c model3d.Coord3D) bool {
+	return s.solid.Contains(c)
+}
+
+func (s solidSDF3D) SDF(c model3d.Coord3D) float64 {
+	return s.sdf.SDF(c)
+}
+
 func testPrimitive2D(t *testing.T, shape primitive2D, solidKernel, sdfKernel ShapeKernel, boundaryEps, sdfEps float32) {
 	t.Helper()
 
@@ -56,6 +98,11 @@ func testPrimitive2D(t *testing.T, shape primitive2D, solidKernel, sdfKernel Sha
 	vals.ExpectBools(t, solidExpected)
 }
 
+func testPrimitive2DSDF(t *testing.T, shape primitive2D, sdfKernel ShapeKernel, boundaryEps, sdfEps float32) {
+	t.Helper()
+	testPrimitive2D(t, shape, SDFToSolid(sdfKernel), sdfKernel, boundaryEps, sdfEps)
+}
+
 func testPrimitive3D(t *testing.T, shape primitive3D, solidKernel, sdfKernel ShapeKernel, boundaryEps, sdfEps float32) {
 	t.Helper()
 
@@ -85,6 +132,11 @@ func testPrimitive3D(t *testing.T, shape primitive3D, solidKernel, sdfKernel Sha
 	}
 	vals = ExecuteShapeKernel(t, solidKernel, solidInputs...)
 	vals.ExpectBools(t, solidExpected)
+}
+
+func testPrimitive3DSDF(t *testing.T, shape primitive3D, sdfKernel ShapeKernel, boundaryEps, sdfEps float32) {
+	t.Helper()
+	testPrimitive3D(t, shape, SDFToSolid(sdfKernel), sdfKernel, boundaryEps, sdfEps)
 }
 
 func TestCirclePrimitive(t *testing.T) {

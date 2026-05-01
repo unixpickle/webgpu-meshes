@@ -4,7 +4,7 @@ import (
 	"fmt"
 )
 
-func solidFromSDF(k ShapeKernel, name string) ShapeKernel {
+func SDFToSolid(k ShapeKernel) ShapeKernel {
 	argType := k.Kind.ArgType()
 	solidKind := Solid2D
 	switch k.Kind {
@@ -15,7 +15,7 @@ func solidFromSDF(k ShapeKernel, name string) ShapeKernel {
 	default:
 		panic("expected SDF kernel")
 	}
-	fnName := genFunctionID(&k.IDs, name)
+	fnName := genFunctionID(&k.IDs, "sdf_to_solid")
 	k.Code += "\n" + fmt.Sprintf(
 		Dedent(`
 			fn %s(p: %s) -> bool {
@@ -114,7 +114,7 @@ func Rect2DSDF(sideLengths Vec2) ShapeKernel {
 }
 
 func Capsule2DSolid(p1, p2 Vec2, radius float32) ShapeKernel {
-	return solidFromSDF(Capsule2DSDF(p1, p2, radius), "capsule2d_solid")
+	return SDFToSolid(Capsule2DSDF(p1, p2, radius))
 }
 
 func Capsule2DSDF(p1, p2 Vec2, radius float32) ShapeKernel {
@@ -211,7 +211,7 @@ func Rect3DSDF(sideLengths Vec3) ShapeKernel {
 }
 
 func Capsule3DSolid(p1, p2 Vec3, radius float32) ShapeKernel {
-	return solidFromSDF(Capsule3DSDF(p1, p2, radius), "capsule3d_solid")
+	return SDFToSolid(Capsule3DSDF(p1, p2, radius))
 }
 
 func Capsule3DSDF(p1, p2 Vec3, radius float32) ShapeKernel {

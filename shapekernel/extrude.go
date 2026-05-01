@@ -17,7 +17,7 @@ type InsetFunction string
 func LinearExtrudeSolid(k ShapeKernel, height float32, center bool, twist float32, scale Vec2) ShapeKernel {
 	switch k.Kind {
 	case SDF2D:
-		k = solidFromSDF(k, "linear_extrude_source_solid")
+		k = SDFToSolid(k)
 	case Solid2D:
 	default:
 		panic("expected 2D solid or SDF kernel")
@@ -149,7 +149,7 @@ func RevolveSolid(k ShapeKernel) ShapeKernel {
 func RevolveSolidRange(k ShapeKernel, angleRad float32, startRad float32) ShapeKernel {
 	switch k.Kind {
 	case SDF2D:
-		k = solidFromSDF(k, "revolve_solid_source_solid")
+		k = SDFToSolid(k)
 	case Solid2D:
 	default:
 		panic("expected 2D solid or SDF kernel")
