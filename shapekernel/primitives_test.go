@@ -30,6 +30,15 @@ type solidSDF2D struct {
 	sdf   model2d.SDF
 }
 
+func solidSDF2DFromSDF(sdf model2d.SDF) solidSDF2D {
+	return solidSDF2D{
+		solid: model2d.CheckedFuncSolid(sdf.Min(), sdf.Max(), func(c model2d.Coord) bool {
+			return sdf.SDF(c) >= 0
+		}),
+		sdf: sdf,
+	}
+}
+
 func (s solidSDF2D) Min() model2d.Coord {
 	return s.solid.Min()
 }
@@ -49,6 +58,15 @@ func (s solidSDF2D) SDF(c model2d.Coord) float64 {
 type solidSDF3D struct {
 	solid model3d.Solid
 	sdf   model3d.SDF
+}
+
+func solidSDF3DFromSDF(sdf model3d.SDF) solidSDF3D {
+	return solidSDF3D{
+		solid: model3d.CheckedFuncSolid(sdf.Min(), sdf.Max(), func(c model3d.Coord3D) bool {
+			return sdf.SDF(c) >= 0
+		}),
+		sdf: sdf,
+	}
 }
 
 func (s solidSDF3D) Min() model3d.Coord3D {
