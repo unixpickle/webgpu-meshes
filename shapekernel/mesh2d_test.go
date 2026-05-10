@@ -1,15 +1,13 @@
 package shapekernel
 
 import (
-	"math"
 	"math/rand"
 	"testing"
 
 	"github.com/unixpickle/model3d/model2d"
 )
 
-func TestMesh2DSolid(t *testing.T) {
-	rng := rand.New(rand.NewSource(0))
+func testRandomMesh2D(rng *rand.Rand) *model2d.Mesh {
 	sourceSolid := model2d.JoinedSolid{}
 	for i := 0; i < 15; i++ {
 		center := model2d.NewCoordRandNorm(rng)
@@ -18,48 +16,19 @@ func TestMesh2DSolid(t *testing.T) {
 			&model2d.Circle{Center: center, Radius: rng.Float64()/3 + 0.1},
 		)
 	}
-	mesh := model2d.MarchingSquaresSearch(sourceSolid, 0.01, 8)
-	kernel := Mesh2DSolid(mesh)
-	meshSDF := model2d.MeshToSDF(mesh)
+	return model2d.MarchingSquaresSearch(sourceSolid, 0.01, 8)
+}
 
-	var inputPoints []Vector
-	var expected []bool
-	for i := 0; i < 1024; i++ {
-		point := model2d.NewCoordRandNorm(rng).Scale(1.3)
-		sdf := meshSDF.SDF(point)
-		if math.Abs(sdf) < 0.01 {
-			i--
-			continue
-		}
-		inputPoints = append(inputPoints, Vec2{float32(point.X), float32(point.Y)})
-		expected = append(expected, sdf > 0)
-	}
-	vals := ExecuteShapeKernel(t, kernel, inputPoints...)
-	vals.ExpectBools(t, expected)
+func TestMesh2DSolid(t *testing.T) {
+	rng := rand.New(rand.NewSource(0))
+	mesh := testRandomMesh2D(rng)
+	meshSDF := model2d.MeshToSDF(mesh)
+	testPrimitive2D(t, solidSDF2DFromSDF(meshSDF), Mesh2DSolid(mesh), Mesh2DSDF(mesh), 0.01, 1e-4)
 }
 
 func TestMesh2DSDF(t *testing.T) {
 	rng := rand.New(rand.NewSource(0))
-	sourceSolid := model2d.JoinedSolid{}
-	for i := 0; i < 15; i++ {
-		center := model2d.NewCoordRandNorm(rng)
-		sourceSolid = append(
-			sourceSolid,
-			&model2d.Circle{Center: center, Radius: rng.Float64()/3 + 0.1},
-		)
-	}
-	mesh := model2d.MarchingSquaresSearch(sourceSolid, 0.01, 8)
-	kernel := Mesh2DSDF(mesh)
+	mesh := testRandomMesh2D(rng)
 	meshSDF := model2d.MeshToSDF(mesh)
-
-	var inputPoints []Vector
-	var expected []float32
-	for i := 0; i < 1024; i++ {
-		point := model2d.NewCoordRandNorm(rng).Scale(1.3)
-		sdf := meshSDF.SDF(point)
-		inputPoints = append(inputPoints, Vec2{float32(point.X), float32(point.Y)})
-		expected = append(expected, float32(sdf))
-	}
-	vals := ExecuteShapeKernel(t, kernel, inputPoints...)
-	vals.ExpectFloats(t, expected, 1e-4)
+	testPrimitive2DSDF(t, solidSDF2DFromSDF(meshSDF), Mesh2DSDF(mesh), 0.01, 1e-4)
 }
