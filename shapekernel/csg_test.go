@@ -68,6 +68,36 @@ func TestSubtractSDF2D(t *testing.T) {
 	)
 }
 
+func offsetReference2D(shape model2d.SDF, offset float64) solidSDF2D {
+	expansion := math.Max(offset, 0)
+	min := shape.Min().AddScalar(-expansion)
+	max := shape.Max().AddScalar(expansion)
+	sdf := model2d.FuncSDF(min, max, func(c model2d.Coord) float64 {
+		return shape.SDF(c) + offset
+	})
+	return solidSDF2D{
+		solid: model2d.CheckedFuncSolid(min, max, func(c model2d.Coord) bool {
+			return sdf.SDF(c) >= 0
+		}),
+		sdf: sdf,
+	}
+}
+
+func offsetReference3D(shape model3d.SDF, offset float64) solidSDF3D {
+	expansion := math.Max(offset, 0)
+	min := shape.Min().AddScalar(-expansion)
+	max := shape.Max().AddScalar(expansion)
+	sdf := model3d.FuncSDF(min, max, func(c model3d.Coord3D) float64 {
+		return shape.SDF(c) + offset
+	})
+	return solidSDF3D{
+		solid: model3d.CheckedFuncSolid(min, max, func(c model3d.Coord3D) bool {
+			return sdf.SDF(c) >= 0
+		}),
+		sdf: sdf,
+	}
+}
+
 func clipReference2D(shape model2d.SDF, min, max model2d.Coord) solidSDF2D {
 	boundsMin, boundsMax := shape.Min(), shape.Max()
 	if !math.IsInf(min.X, -1) {
@@ -238,6 +268,34 @@ func TestClipSolid3D(t *testing.T) {
 	)
 }
 
+func TestInsetSDF2D(t *testing.T) {
+	shape := model2d.TransformSDF(&model2d.Translate{Offset: model2d.XY(0.2, -0.1)}, &model2d.Circle{Radius: 0.85})
+	testPrimitive2DSDF(
+		t,
+		offsetReference2D(shape, -0.18),
+		InsetSDF(
+			Translate(CircleSDF(0.85), Vec2{0.2, -0.1}),
+			0.18,
+		),
+		1e-4,
+		1e-4,
+	)
+}
+
+func TestOutsetSDF2D(t *testing.T) {
+	shape := model2d.TransformSDF(&model2d.Translate{Offset: model2d.XY(-0.15, 0.05)}, &model2d.Circle{Radius: 0.7})
+	testPrimitive2DSDF(
+		t,
+		offsetReference2D(shape, 0.22),
+		OutsetSDF(
+			Translate(CircleSDF(0.7), Vec2{-0.15, 0.05}),
+			0.22,
+		),
+		1e-4,
+		1e-4,
+	)
+}
+
 func TestClipSDF3D(t *testing.T) {
 	shape := model3d.TransformSDF(&model3d.Translate{Offset: model3d.XYZ(0.1, -0.05, 0.2)}, &model3d.Sphere{Radius: 0.9})
 	min := model3d.XYZ(math.Inf(-1), -0.2, -0.15)
@@ -249,6 +307,34 @@ func TestClipSDF3D(t *testing.T) {
 			Translate(SphereSDF(0.9), Vec3{0.1, -0.05, 0.2}),
 			Vec3{float32(math.Inf(-1)), -0.2, -0.15},
 			Vec3{0.5, float32(math.Inf(1)), 0.7},
+		),
+		1e-4,
+		1e-4,
+	)
+}
+
+func TestInsetSDF3D(t *testing.T) {
+	shape := model3d.TransformSDF(&model3d.Translate{Offset: model3d.XYZ(0.1, -0.05, 0.2)}, &model3d.Sphere{Radius: 0.9})
+	testPrimitive3DSDF(
+		t,
+		offsetReference3D(shape, -0.16),
+		InsetSDF(
+			Translate(SphereSDF(0.9), Vec3{0.1, -0.05, 0.2}),
+			0.16,
+		),
+		1e-4,
+		1e-4,
+	)
+}
+
+func TestOutsetSDF3D(t *testing.T) {
+	shape := model3d.TransformSDF(&model3d.Translate{Offset: model3d.XYZ(-0.2, 0.15, -0.1)}, &model3d.Sphere{Radius: 0.65})
+	testPrimitive3DSDF(
+		t,
+		offsetReference3D(shape, 0.2),
+		OutsetSDF(
+			Translate(SphereSDF(0.65), Vec3{-0.2, 0.15, -0.1}),
+			0.2,
 		),
 		1e-4,
 		1e-4,

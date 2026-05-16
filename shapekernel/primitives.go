@@ -4,6 +4,17 @@ import (
 	"fmt"
 )
 
+func Empty(kind ShapeKind) ShapeKernel {
+	switch kind {
+	case Solid2D, Solid3D:
+		return emptyKernel(kind, "empty_solid", "false")
+	case SDF2D, SDF3D:
+		return emptyKernel(kind, "empty_sdf", "-1.0 / (p.x - p.x)")
+	default:
+		panic("expected solid or SDF kind")
+	}
+}
+
 func SDFToSolid(k ShapeKernel) ShapeKernel {
 	argType := k.Kind.ArgType()
 	solidKind := Solid2D
@@ -31,6 +42,27 @@ func SDFToSolid(k ShapeKernel) ShapeKernel {
 	return k
 }
 
+func emptyKernel(kind ShapeKind, name, returnExpr string) ShapeKernel {
+	ids := IDTracker{}
+	entrypointName := genFunctionID(&ids, name)
+	return ShapeKernel{
+		Kind: kind,
+		IDs:  ids,
+		Code: fmt.Sprintf(
+			Dedent(`
+				fn %s(p: %s) -> %s {
+					return %s;
+				}
+			`),
+			entrypointName,
+			kind.ArgType(),
+			kind.ReturnType(),
+			returnExpr,
+		),
+		EntrypointName: entrypointName,
+	}
+}
+
 func CircleSolid(r float32) ShapeKernel {
 	ids := IDTracker{}
 	entrypointName := genFunctionID(&ids, "circle_solid")
@@ -46,6 +78,30 @@ func CircleSolid(r float32) ShapeKernel {
 			`),
 			entrypointName,
 			r,
+		),
+		EntrypointName: entrypointName,
+	}
+}
+
+func Teardrop2DSolid(r float32) ShapeKernel {
+	ids := IDTracker{}
+	entrypointName := genFunctionID(&ids, "teardrop2d_solid")
+	return ShapeKernel{
+		Kind: Solid2D,
+		IDs:  ids,
+		Code: fmt.Sprintf(
+			Dedent(`
+				fn %s(p: vec2<f32>) -> bool {
+					if (length(p) <= %f) {
+						return true;
+					}
+					return p.y >= %f && p.y + abs(p.x) <= %f;
+				}
+			`),
+			entrypointName,
+			r,
+			r/1.4142135623730951,
+			r*1.4142135623730951,
 		),
 		EntrypointName: entrypointName,
 	}

@@ -7,6 +7,7 @@ import (
 
 	"github.com/unixpickle/model3d/model2d"
 	"github.com/unixpickle/model3d/model3d"
+	"github.com/unixpickle/model3d/toolbox3d"
 )
 
 const primitiveTestSamples = 1024
@@ -157,10 +158,101 @@ func testPrimitive3DSDF(t *testing.T, shape primitive3D, sdfKernel ShapeKernel, 
 	testPrimitive3D(t, shape, SDFToSolid(sdfKernel), sdfKernel, boundaryEps, sdfEps)
 }
 
+func TestEmptySolid2D(t *testing.T) {
+	vals := ExecuteShapeKernel(
+		t,
+		Empty(Solid2D),
+		Vec2{0, 0},
+		Vec2{1, -1},
+		Vec2{-2, 3},
+	)
+	vals.ExpectBools(t, []bool{false, false, false})
+}
+
+func TestEmptySolid3D(t *testing.T) {
+	vals := ExecuteShapeKernel(
+		t,
+		Empty(Solid3D),
+		Vec3{0, 0, 0},
+		Vec3{1, -1, 2},
+		Vec3{-2, 3, 4},
+	)
+	vals.ExpectBools(t, []bool{false, false, false})
+}
+
+func TestEmptySDF(t *testing.T) {
+	for _, kind := range []ShapeKind{SDF2D, SDF3D} {
+		k := Empty(kind)
+		if k.Kind != kind {
+			t.Fatalf("expected kind %v but got %v", kind, k.Kind)
+		}
+		var inputs []Vector
+		switch kind {
+		case SDF2D:
+			inputs = []Vector{Vec2{0, 0}, Vec2{1, -1}}
+		case SDF3D:
+			inputs = []Vector{Vec3{0, 0, 0}, Vec3{1, -1, 2}}
+		default:
+			t.Fatalf("unexpected kind %v", kind)
+		}
+		vals := ExecuteShapeKernel(t, k, inputs...)
+		for _, f := range vals.Floats {
+			if !math.IsInf(float64(f), -1) {
+				t.Fatalf("expected -Inf outputs but got %v", vals.Floats)
+			}
+		}
+	}
+}
+
+func TestEmptySDFToSolid(t *testing.T) {
+	vals2D := ExecuteShapeKernel(
+		t,
+		SDFToSolid(Empty(SDF2D)),
+		Vec2{0, 0},
+		Vec2{1, -1},
+	)
+	vals2D.ExpectBools(t, []bool{false, false})
+
+	vals3D := ExecuteShapeKernel(
+		t,
+		SDFToSolid(Empty(SDF3D)),
+		Vec3{0, 0, 0},
+		Vec3{1, -1, 2},
+	)
+	vals3D.ExpectBools(t, []bool{false, false})
+}
+
+func TestEmptyValidateKinds(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic for invalid empty kind")
+		}
+	}()
+	Empty(Metaball2D)
+}
+
 func TestCirclePrimitive(t *testing.T) {
 	radius := float32(0.61)
 	shape := &model2d.Circle{Radius: float64(radius)}
 	testPrimitive2D(t, shape, CircleSolid(radius), CircleSDF(radius), 1e-4, 1e-4)
+}
+
+func TestTeardrop2DPrimitive(t *testing.T) {
+	radius := float32(0.61)
+	shape := &toolbox3d.Teardrop2D{
+		Radius:    float64(radius),
+		Direction: model2d.Y(1),
+	}
+	mesh := model2d.MarchingSquaresSearch(shape, 0.01, 8)
+	meshSDF := model2d.MeshToSDF(mesh)
+	testPrimitive2D(
+		t,
+		solidSDF2D{solid: shape, sdf: meshSDF},
+		Teardrop2DSolid(radius),
+		Mesh2DSDF(mesh),
+		0.03,
+		1e-4,
+	)
 }
 
 func TestRect2DPrimitive(t *testing.T) {

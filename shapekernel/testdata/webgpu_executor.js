@@ -206,7 +206,7 @@ async function executeInBrowser(request) {
         };
       }
       return {
-        floats: Array.from(new Float32Array(copy)),
+        floatBits: Array.from(new Uint32Array(copy)),
       };
     }, {
       ...request,

@@ -173,6 +173,16 @@ func Translate(k ShapeKernel, offset Vector) ShapeKernel {
 	return k
 }
 
+// InsetSDF offsets an SDF inward by subtracting inset from its value.
+func InsetSDF(k ShapeKernel, inset float32) ShapeKernel {
+	return offsetSDF(k, -inset, "inset")
+}
+
+// OutsetSDF offsets an SDF outward by adding outset to its value.
+func OutsetSDF(k ShapeKernel, outset float32) ShapeKernel {
+	return offsetSDF(k, outset, "outset")
+}
+
 func Scale(k ShapeKernel, scales Vector) ShapeKernel {
 	if k.Kind == FalloffFunc {
 		panic("cannot scale falloff functions")
@@ -196,6 +206,26 @@ func Scale(k ShapeKernel, scales Vector) ShapeKernel {
 		scales.WebGPUVec(),
 		k.EntrypointName,
 		scaleCode,
+	)
+	k.EntrypointName = fnName
+	return k
+}
+
+func offsetSDF(k ShapeKernel, offset float32, name string) ShapeKernel {
+	if k.Kind != SDF2D && k.Kind != SDF3D {
+		panic("expected SDF kernel")
+	}
+	fnName := genFunctionID(&k.IDs, name+"_sdf")
+	k.Code += "\n" + fmt.Sprintf(
+		Dedent(`
+			fn %s(p: %s) -> f32 {
+				return %s(p) + %f;
+			}
+		`),
+		fnName,
+		k.Kind.ArgType(),
+		k.EntrypointName,
+		offset,
 	)
 	k.EntrypointName = fnName
 	return k

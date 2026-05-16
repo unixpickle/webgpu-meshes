@@ -19,6 +19,28 @@ type KernelExecutionResult struct {
 	Floats []float32 `json:"floats,omitempty"`
 }
 
+func (k *KernelExecutionResult) UnmarshalJSON(data []byte) error {
+	type kernelExecutionResultJSON struct {
+		Bools     []bool    `json:"bools,omitempty"`
+		Floats    []float32 `json:"floats,omitempty"`
+		FloatBits []uint32  `json:"floatBits,omitempty"`
+	}
+	var decoded kernelExecutionResultJSON
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	k.Bools = decoded.Bools
+	if len(decoded.FloatBits) > 0 {
+		k.Floats = make([]float32, len(decoded.FloatBits))
+		for i, bits := range decoded.FloatBits {
+			k.Floats[i] = math.Float32frombits(bits)
+		}
+	} else {
+		k.Floats = decoded.Floats
+	}
+	return nil
+}
+
 func (k *KernelExecutionResult) ExpectBools(t *testing.T, v []bool) {
 	if len(v) != len(k.Bools) {
 		t.Fatalf("unexpected bools: %v (expected %v)", k.Bools, v)
@@ -37,6 +59,19 @@ func (k *KernelExecutionResult) ExpectFloats(t *testing.T, v []float32, eps floa
 	}
 	for i, x := range v {
 		a := k.Floats[i]
+		if math.IsNaN(float64(x)) || math.IsNaN(float64(a)) {
+			if !(math.IsNaN(float64(x)) && math.IsNaN(float64(a))) {
+				t.Fatalf("unexpected floats: %v (expected %v)", k.Floats, v)
+			}
+			continue
+		}
+		if math.IsInf(float64(x), 0) || math.IsInf(float64(a), 0) {
+			if !(math.IsInf(float64(x), 1) && math.IsInf(float64(a), 1)) &&
+				!(math.IsInf(float64(x), -1) && math.IsInf(float64(a), -1)) {
+				t.Fatalf("unexpected floats: %v (expected %v)", k.Floats, v)
+			}
+			continue
+		}
 		if math.Abs(float64(a-x)) > float64(eps) {
 			t.Fatalf("unexpected floats: %v (expected %v)", k.Floats, v)
 		}
@@ -194,4 +229,34 @@ func formatExecutorFailure(stderr, stdout string) string {
 		details = append(details, "stdout:\n"+stdout)
 	}
 	return fmt.Sprintf("%s", strings.Join(details, "\n"))
+}
+
+func TestExecuteShapeKernelNonFiniteFloats(t *testing.T) {
+	ids := IDTracker{}
+	entrypointName := genFunctionID(&ids, "nonfinite")
+	k := ShapeKernel{
+		Kind: SDF2D,
+		IDs:  ids,
+		Code: fmt.Sprintf(
+			Dedent(`
+				fn %s(p: vec2<f32>) -> f32 {
+					return p.x / p.y;
+				}
+			`),
+			entrypointName,
+		),
+		EntrypointName: entrypointName,
+	}
+	vals := ExecuteShapeKernel(
+		t,
+		k,
+		Vec2{1, 0},
+		Vec2{-1, 0},
+		Vec2{0, 0},
+	)
+	vals.ExpectFloats(t, []float32{
+		float32(math.Inf(1)),
+		float32(math.Inf(-1)),
+		float32(math.NaN()),
+	}, 0)
 }
