@@ -4,6 +4,15 @@ import (
 	"fmt"
 )
 
+func flattenSegment3s(lines []Segment3) []float32 {
+	result := make([]float32, 0, len(lines)*6)
+	for _, line := range lines {
+		result = append(result, line[0][0], line[0][1], line[0][2])
+		result = append(result, line[1][0], line[1][1], line[1][2])
+	}
+	return result
+}
+
 func Empty(kind ShapeKind) ShapeKernel {
 	switch kind {
 	case Solid2D, Solid3D:
@@ -268,6 +277,137 @@ func Rect3DSDF(sideLengths Vec3) ShapeKernel {
 
 func Capsule3DSolid(p1, p2 Vec3, radius float32) ShapeKernel {
 	return SDFToSolid(Capsule3DSDF(p1, p2, radius))
+}
+
+// LineJoinSolid creates a solid containing all points within Euclidean
+// distance r of any segment, like toolbox3d.LineJoin.
+func LineJoinSolid(r float32, lines ...Segment3) ShapeKernel {
+	ids := IDTracker{}
+	entrypointName := genFunctionID(&ids, "line_join_solid")
+	bufName := genBufferID(&ids, "segments")
+	segmentDistanceName := genFunctionID(&ids, "segment_distance3d")
+	lineData := flattenSegment3s(lines)
+
+	return ShapeKernel{
+		Kind: Solid3D,
+		IDs:  ids,
+		Buffers: []Buffer{
+			{
+				Name: bufName,
+				Constructor: func() []float32 {
+					return lineData
+				},
+			},
+		},
+		Code: Dedent(fmt.Sprintf(`
+			fn %s(p: vec3<f32>, p1: vec3<f32>, p2: vec3<f32>) -> f32 {
+				let v = p2 - p1;
+				let vNormSq = dot(v, v);
+				var t = 0.0;
+				if (vNormSq > 0.0) {
+					t = clamp(dot(p - p1, v) / vNormSq, 0.0, 1.0);
+				}
+				let closest = p1 + t * v;
+				return distance(p, closest);
+			}
+
+			fn %s(p: vec3<f32>) -> bool {
+				let numSegs = %du;
+				for (var i = 0u; i < numSegs; i++) {
+					let p1 = vec3<f32>(%s[i*6], %s[i*6+1], %s[i*6+2]);
+					let p2 = vec3<f32>(%s[i*6+3], %s[i*6+4], %s[i*6+5]);
+					if (%s(p, p1, p2) <= %f) {
+						return true;
+					}
+				}
+				return false;
+			}
+		`, segmentDistanceName, entrypointName, len(lines), bufName, bufName, bufName, bufName, bufName, bufName, segmentDistanceName, r)),
+		EntrypointName: entrypointName,
+	}
+}
+
+// L1LineJoinSolid creates a solid containing all points within L1 distance r
+// of any segment, like toolbox3d.L1LineJoin.
+func L1LineJoinSolid(r float32, lines ...Segment3) ShapeKernel {
+	ids := IDTracker{}
+	entrypointName := genFunctionID(&ids, "l1_line_join_solid")
+	bufName := genBufferID(&ids, "segments")
+	l1DistanceName := genFunctionID(&ids, "l1_distance3d")
+	segmentL1DistanceName := genFunctionID(&ids, "segment_l1_distance3d")
+	lineData := flattenSegment3s(lines)
+
+	return ShapeKernel{
+		Kind: Solid3D,
+		IDs:  ids,
+		Buffers: []Buffer{
+			{
+				Name: bufName,
+				Constructor: func() []float32 {
+					return lineData
+				},
+			},
+		},
+		Code: Dedent(fmt.Sprintf(`
+			fn %s(p1: vec3<f32>, p2: vec3<f32>) -> f32 {
+				let delta = abs(p1 - p2);
+				return delta.x + delta.y + delta.z;
+			}
+
+			fn %s(p: vec3<f32>, p1: vec3<f32>, p2: vec3<f32>) -> f32 {
+				let v = p2 - p1;
+				var best = min(%s(p, p1), %s(p, p2));
+
+				if (abs(v.x) > 1e-12) {
+					let t = (p.x - p1.x) / v.x;
+					if (t > 0.0 && t < 1.0) {
+						best = min(best, %s(p, p1 + v * t));
+					}
+				}
+				if (abs(v.y) > 1e-12) {
+					let t = (p.y - p1.y) / v.y;
+					if (t > 0.0 && t < 1.0) {
+						best = min(best, %s(p, p1 + v * t));
+					}
+				}
+				if (abs(v.z) > 1e-12) {
+					let t = (p.z - p1.z) / v.z;
+					if (t > 0.0 && t < 1.0) {
+						best = min(best, %s(p, p1 + v * t));
+					}
+				}
+
+				return best;
+			}
+
+			fn %s(p: vec3<f32>) -> bool {
+				let numSegs = %du;
+				for (var i = 0u; i < numSegs; i++) {
+					let p1 = vec3<f32>(%s[i*6], %s[i*6+1], %s[i*6+2]);
+					let p2 = vec3<f32>(%s[i*6+3], %s[i*6+4], %s[i*6+5]);
+					let axisVec = p1 - p2;
+					let axisLen = length(axisVec);
+					if (axisLen <= 0.0) {
+						if (%s(p, p1) < %f) {
+							return true;
+						}
+						continue;
+					}
+
+					let axis = axisVec / axisLen;
+					let axial = dot(p - p2, axis);
+					if (axial >= 0.0 && axial <= axisLen && %s(p, p1, p2) < %f) {
+						return true;
+					}
+					if (%s(p, p1) < %f || %s(p, p2) < %f) {
+						return true;
+					}
+				}
+				return false;
+			}
+		`, l1DistanceName, segmentL1DistanceName, l1DistanceName, l1DistanceName, l1DistanceName, l1DistanceName, l1DistanceName, entrypointName, len(lines), bufName, bufName, bufName, bufName, bufName, bufName, l1DistanceName, r, segmentL1DistanceName, r, l1DistanceName, r, l1DistanceName, r)),
+		EntrypointName: entrypointName,
+	}
 }
 
 func Capsule3DSDF(p1, p2 Vec3, radius float32) ShapeKernel {

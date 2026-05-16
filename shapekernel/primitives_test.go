@@ -158,6 +158,63 @@ func testPrimitive3DSDF(t *testing.T, shape primitive3D, sdfKernel ShapeKernel, 
 	testPrimitive3D(t, shape, SDFToSolid(sdfKernel), sdfKernel, boundaryEps, sdfEps)
 }
 
+func testSolidKernel3D(t *testing.T, shape model3d.Solid, kernel ShapeKernel, boundaryDistance func(model3d.Coord3D) float64, boundaryEps float64) {
+	t.Helper()
+
+	rng := rand.New(rand.NewSource(0))
+	center := shape.Min().Mid(shape.Max())
+	extent := shape.Max().Sub(shape.Min()).Scale(0.8)
+
+	var solidInputs []Vector
+	var solidExpected []bool
+	for len(solidInputs) < primitiveTestSamples {
+		point := model3d.NewCoord3DRandNorm(rng).Mul(extent).Add(center)
+		if boundaryDistance(point) < boundaryEps {
+			continue
+		}
+		solidInputs = append(solidInputs, Vec3{float32(point.X), float32(point.Y), float32(point.Z)})
+		solidExpected = append(solidExpected, shape.Contains(point))
+	}
+	vals := ExecuteShapeKernel(t, kernel, solidInputs...)
+	vals.ExpectBools(t, solidExpected)
+}
+
+func kernelSegments3(lines ...model3d.Segment) []Segment3 {
+	result := make([]Segment3, len(lines))
+	for i, line := range lines {
+		result[i] = Segment3{
+			{
+				float32(line[0].X),
+				float32(line[0].Y),
+				float32(line[0].Z),
+			},
+			{
+				float32(line[1].X),
+				float32(line[1].Y),
+				float32(line[1].Z),
+			},
+		}
+	}
+	return result
+}
+
+func lineJoinBoundaryDistance(point model3d.Coord3D, radius float64, lines []model3d.Segment) float64 {
+	minDist := math.Inf(1)
+	for _, line := range lines {
+		minDist = math.Min(minDist, line.Dist(point))
+	}
+	return math.Abs(minDist - radius)
+}
+
+func l1LineJoinBoundaryDistance(point model3d.Coord3D, radius float64, lines []model3d.Segment) float64 {
+	minDist := math.Inf(1)
+	for _, line := range lines {
+		seg := line
+		minDist = math.Min(minDist, seg.L1Dist(point))
+	}
+	return math.Abs(minDist - radius)
+}
+
 func TestEmptySolid2D(t *testing.T) {
 	vals := ExecuteShapeKernel(
 		t,
@@ -313,6 +370,62 @@ func TestCylinderPrimitive(t *testing.T) {
 		Radius: float64(radius),
 	}
 	testPrimitive3D(t, shape, CylinderSolid(p1, p2, radius), CylinderSDF(p1, p2, radius), 2e-4, 2e-4)
+}
+
+func TestLineJoinPrimitive(t *testing.T) {
+	radius := 0.28
+	lines := []model3d.Segment{
+		{
+			model3d.XYZ(-0.8, 0.35, 0.2),
+			model3d.XYZ(0.55, -0.45, 0.9),
+		},
+		{
+			model3d.XYZ(-0.2, -0.7, -0.4),
+			model3d.XYZ(0.3, 0.8, -0.1),
+		},
+		{
+			model3d.XYZ(0.5, -0.1, 0.4),
+			model3d.XYZ(0.5, -0.1, 0.4),
+		},
+	}
+	shape := toolbox3d.LineJoin(radius, lines...)
+	testSolidKernel3D(
+		t,
+		shape,
+		LineJoinSolid(float32(radius), kernelSegments3(lines...)...),
+		func(point model3d.Coord3D) float64 {
+			return lineJoinBoundaryDistance(point, radius, lines)
+		},
+		1e-4,
+	)
+}
+
+func TestL1LineJoinPrimitive(t *testing.T) {
+	radius := 0.31
+	lines := []model3d.Segment{
+		{
+			model3d.XYZ(-0.8, 0.35, 0.2),
+			model3d.XYZ(0.55, -0.45, 0.9),
+		},
+		{
+			model3d.XYZ(-0.2, -0.7, -0.4),
+			model3d.XYZ(0.3, 0.8, -0.1),
+		},
+		{
+			model3d.XYZ(0.5, -0.1, 0.4),
+			model3d.XYZ(0.5, -0.1, 0.4),
+		},
+	}
+	shape := toolbox3d.L1LineJoin(radius, lines...)
+	testSolidKernel3D(
+		t,
+		shape,
+		L1LineJoinSolid(float32(radius), kernelSegments3(lines...)...),
+		func(point model3d.Coord3D) float64 {
+			return l1LineJoinBoundaryDistance(point, radius, lines)
+		},
+		1e-4,
+	)
 }
 
 func TestConePrimitive(t *testing.T) {

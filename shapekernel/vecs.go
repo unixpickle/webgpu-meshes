@@ -30,6 +30,8 @@ func (v Vec3) At(i int) float32 {
 	return v[i]
 }
 
+type Segment3 [2]Vec3
+
 type Vector interface {
 	Dim() int
 	WebGPUVec() string
