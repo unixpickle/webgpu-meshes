@@ -292,12 +292,9 @@ func LineJoinSolid(r float32, lines ...Segment3) ShapeKernel {
 		Kind: Solid3D,
 		IDs:  ids,
 		Buffers: []Buffer{
-			{
-				Name: bufName,
-				Constructor: func() []float32 {
-					return lineData
-				},
-			},
+			Float32Buffer(bufName, func() []float32 {
+				return lineData
+			}),
 		},
 		Code: Dedent(fmt.Sprintf(`
 			fn %s(p: vec3<f32>, p1: vec3<f32>, p2: vec3<f32>) -> f32 {
@@ -311,18 +308,20 @@ func LineJoinSolid(r float32, lines ...Segment3) ShapeKernel {
 				return distance(p, closest);
 			}
 
-			fn %s(p: vec3<f32>) -> bool {
-				let numSegs = %du;
-				for (var i = 0u; i < numSegs; i++) {
-					let p1 = vec3<f32>(%s[i*6], %s[i*6+1], %s[i*6+2]);
-					let p2 = vec3<f32>(%s[i*6+3], %s[i*6+4], %s[i*6+5]);
-					if (%s(p, p1, p2) <= %f) {
-						return true;
+				fn %s(p: vec3<f32>) -> bool {
+					let numSegs = %du;
+					for (var i = 0u; i < numSegs; i++) {
+						let p1 = vec3<f32>(%s[i*6], %s[i*6+1], %s[i*6+2]);
+						let p2 = vec3<f32>(%s[i*6+3], %s[i*6+4], %s[i*6+5]);
+						if (%s(p, p1, p2) <= %f) {
+							return true;
+						}
 					}
+					return false;
 				}
-				return false;
-			}
-		`, segmentDistanceName, entrypointName, len(lines), bufName, bufName, bufName, bufName, bufName, bufName, segmentDistanceName, r)),
+		`, segmentDistanceName, entrypointName, len(lines),
+			bufName, bufName, bufName, bufName, bufName, bufName,
+			segmentDistanceName, r)),
 		EntrypointName: entrypointName,
 	}
 }
@@ -341,12 +340,9 @@ func L1LineJoinSolid(r float32, lines ...Segment3) ShapeKernel {
 		Kind: Solid3D,
 		IDs:  ids,
 		Buffers: []Buffer{
-			{
-				Name: bufName,
-				Constructor: func() []float32 {
-					return lineData
-				},
-			},
+			Float32Buffer(bufName, func() []float32 {
+				return lineData
+			}),
 		},
 		Code: Dedent(fmt.Sprintf(`
 			fn %s(p1: vec3<f32>, p2: vec3<f32>) -> f32 {
@@ -380,12 +376,12 @@ func L1LineJoinSolid(r float32, lines ...Segment3) ShapeKernel {
 				return best;
 			}
 
-			fn %s(p: vec3<f32>) -> bool {
-				let numSegs = %du;
-				for (var i = 0u; i < numSegs; i++) {
-					let p1 = vec3<f32>(%s[i*6], %s[i*6+1], %s[i*6+2]);
-					let p2 = vec3<f32>(%s[i*6+3], %s[i*6+4], %s[i*6+5]);
-					let axisVec = p1 - p2;
+				fn %s(p: vec3<f32>) -> bool {
+					let numSegs = %du;
+					for (var i = 0u; i < numSegs; i++) {
+						let p1 = vec3<f32>(%s[i*6], %s[i*6+1], %s[i*6+2]);
+						let p2 = vec3<f32>(%s[i*6+3], %s[i*6+4], %s[i*6+5]);
+						let axisVec = p1 - p2;
 					let axisLen = length(axisVec);
 					if (axisLen <= 0.0) {
 						if (%s(p, p1) < %f) {
@@ -402,10 +398,12 @@ func L1LineJoinSolid(r float32, lines ...Segment3) ShapeKernel {
 					if (%s(p, p1) < %f || %s(p, p2) < %f) {
 						return true;
 					}
+					}
+					return false;
 				}
-				return false;
-			}
-		`, l1DistanceName, segmentL1DistanceName, l1DistanceName, l1DistanceName, l1DistanceName, l1DistanceName, l1DistanceName, entrypointName, len(lines), bufName, bufName, bufName, bufName, bufName, bufName, l1DistanceName, r, segmentL1DistanceName, r, l1DistanceName, r, l1DistanceName, r)),
+		`, l1DistanceName, segmentL1DistanceName, l1DistanceName, l1DistanceName, l1DistanceName, l1DistanceName, l1DistanceName, entrypointName, len(lines),
+			bufName, bufName, bufName, bufName, bufName, bufName,
+			l1DistanceName, r, segmentL1DistanceName, r, l1DistanceName, r, l1DistanceName, r)),
 		EntrypointName: entrypointName,
 	}
 }

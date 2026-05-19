@@ -31,10 +31,7 @@ func Mesh2DSolid(m2 *model2d.Mesh) ShapeKernel {
 		Kind: Solid2D,
 		IDs:  ids,
 		Buffers: []Buffer{
-			{
-				Name:        bufName,
-				Constructor: bufFn,
-			},
+			Float32Buffer(bufName, bufFn),
 		},
 		Code: Dedent(fmt.Sprintf(`
 			fn %s(p: vec2<f32>) -> bool {
@@ -111,7 +108,8 @@ func Mesh2DSDF(m2 *model2d.Mesh) ShapeKernel {
 					return -minDist;
 				}
 			}
-		`, entrypointName, m2.NumSegments(), bufName, bufName, bufName, bufName, solidKernel.EntrypointName)),
+		`, entrypointName, m2.NumSegments(), bufName, bufName, bufName, bufName,
+			solidKernel.EntrypointName)),
 		EntrypointName: entrypointName,
 	}
 }

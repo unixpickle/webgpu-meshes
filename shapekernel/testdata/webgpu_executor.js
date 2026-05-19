@@ -39,7 +39,7 @@ function browserExecutablePath() {
 
 function buildShaderSource(request) {
   const bufferDecls = request.buffers.map((buffer, index) => (
-    `@group(0) @binding(${index}) var<storage, read> ${buffer.name}: array<f32>;`
+    `@group(0) @binding(${index}) var<storage, read> ${buffer.name}: array<${buffer.wgslType}>;`
   ));
   const pointExpr = request.dim === 2 ? 'packed.xy' : 'packed.xyz';
   const outputType = request.returnType === 'bool' ? 'u32' : 'f32';
@@ -143,7 +143,7 @@ async function executeInBrowser(request) {
 
       const bindEntries = [];
       for (let i = 0; i < request.buffers.length; i += 1) {
-        const data = new Float32Array(request.buffers[i].values);
+        const data = new Uint32Array(request.buffers[i].values);
         const buffer = device.createBuffer({
           size: data.byteLength,
           usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,

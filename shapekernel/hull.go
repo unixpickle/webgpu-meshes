@@ -28,18 +28,12 @@ func ArcHullSolid(h *model2d.ArcHull) ShapeKernel {
 		Kind: Solid2D,
 		IDs:  ids,
 		Buffers: []Buffer{
-			{
-				Name: arcBufName,
-				Constructor: func() []float32 {
-					return arcData
-				},
-			},
-			{
-				Name: segBufName,
-				Constructor: func() []float32 {
-					return segData
-				},
-			},
+			Float32Buffer(arcBufName, func() []float32 {
+				return arcData
+			}),
+			Float32Buffer(segBufName, func() []float32 {
+				return segData
+			}),
 		},
 		Code: Dedent(fmt.Sprintf(`
 			fn %s(a: vec2<f32>, b: vec2<f32>) -> f32 {
@@ -127,26 +121,28 @@ func ArcHullSolid(h *model2d.ArcHull) ShapeKernel {
 					return true;
 				}
 
-				var bestScale = 1e30;
-				for (var i = 0u; i < numArcs; i++) {
-					let center = vec2<f32>(%s[i*5], %s[i*5+1]);
-					let radius = %s[i*5+2];
-					let start = %s[i*5+3];
-					let end = %s[i*5+4];
-					bestScale = min(bestScale, %s(startCenter, dir, center, radius, start, end));
-				}
-				for (var i = 0u; i < numSegs; i++) {
-					let p1 = vec2<f32>(%s[i*4], %s[i*4+1]);
-					let p2 = vec2<f32>(%s[i*4+2], %s[i*4+3]);
-					bestScale = min(bestScale, %s(startCenter, dir, p1, p2));
-				}
+					var bestScale = 1e30;
+					for (var i = 0u; i < numArcs; i++) {
+							let center = vec2<f32>(%s[i*5], %s[i*5+1]);
+							let radius = %s[i*5+2];
+							let start = %s[i*5+3];
+							let end = %s[i*5+4];
+						bestScale = min(bestScale, %s(startCenter, dir, center, radius, start, end));
+					}
+					for (var i = 0u; i < numSegs; i++) {
+							let p1 = vec2<f32>(%s[i*4], %s[i*4+1]);
+							let p2 = vec2<f32>(%s[i*4+2], %s[i*4+3]);
+						bestScale = min(bestScale, %s(startCenter, dir, p1, p2));
+					}
 
 				if (bestScale >= 1e29) {
 					return false;
+					}
+					return bestScale >= 1.0;
 				}
-				return bestScale >= 1.0;
-			}
-		`, crossName, arcContainsName, segmentRayScaleName, crossName, crossName, crossName, arcRayScaleName, arcContainsName, arcContainsName, entrypointName, len(arcData)/5, len(segData)/4, startCenter.WebGPUVec(), arcBufName, arcBufName, arcBufName, arcBufName, arcBufName, arcRayScaleName, segBufName, segBufName, segBufName, segBufName, segmentRayScaleName)),
+				`, crossName, arcContainsName, segmentRayScaleName, crossName, crossName, crossName, arcRayScaleName, arcContainsName, arcContainsName, entrypointName, len(arcData)/5, len(segData)/4, startCenter.WebGPUVec(),
+			arcBufName, arcBufName, arcBufName, arcBufName, arcBufName, arcRayScaleName,
+			segBufName, segBufName, segBufName, segBufName, segmentRayScaleName)),
 		EntrypointName: entrypointName,
 	}
 }
@@ -221,26 +217,28 @@ func ArcHullSDF(h *model2d.ArcHull) ShapeKernel {
 					return 0.0;
 				}
 
-				var minDist = 1e30;
-				for (var i = 0u; i < numArcs; i++) {
-					let center = vec2<f32>(%s[i*5], %s[i*5+1]);
-					let radius = %s[i*5+2];
-					let start = %s[i*5+3];
-					let end = %s[i*5+4];
-					minDist = min(minDist, %s(p, center, radius, start, end));
-				}
-				for (var i = 0u; i < numSegs; i++) {
-					let p1 = vec2<f32>(%s[i*4], %s[i*4+1]);
-					let p2 = vec2<f32>(%s[i*4+2], %s[i*4+3]);
-					minDist = min(minDist, %s(p, p1, p2));
-				}
+					var minDist = 1e30;
+					for (var i = 0u; i < numArcs; i++) {
+							let center = vec2<f32>(%s[i*5], %s[i*5+1]);
+							let radius = %s[i*5+2];
+							let start = %s[i*5+3];
+							let end = %s[i*5+4];
+						minDist = min(minDist, %s(p, center, radius, start, end));
+					}
+					for (var i = 0u; i < numSegs; i++) {
+							let p1 = vec2<f32>(%s[i*4], %s[i*4+1]);
+							let p2 = vec2<f32>(%s[i*4+2], %s[i*4+3]);
+						minDist = min(minDist, %s(p, p1, p2));
+					}
 
 				if (%s(p)) {
 					return minDist;
+					}
+					return -minDist;
 				}
-				return -minDist;
-			}
-		`, arcContainsName, segmentDistanceName, arcDistanceName, arcContainsName, entrypointName, arcCount, segCount, arcBufName, arcBufName, arcBufName, arcBufName, arcBufName, arcDistanceName, segBufName, segBufName, segBufName, segBufName, segmentDistanceName, solidKernel.EntrypointName)),
+				`, arcContainsName, segmentDistanceName, arcDistanceName, arcContainsName, entrypointName, arcCount, segCount,
+			arcBufName, arcBufName, arcBufName, arcBufName, arcBufName, arcDistanceName,
+			segBufName, segBufName, segBufName, segBufName, segmentDistanceName, solidKernel.EntrypointName)),
 		EntrypointName: entrypointName,
 	}
 }

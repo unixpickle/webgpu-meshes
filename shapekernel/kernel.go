@@ -2,6 +2,7 @@ package shapekernel
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -57,8 +58,53 @@ type IDTracker struct {
 }
 
 type Buffer struct {
+	WGSLType    string
 	Name        string
-	Constructor func() []float32
+	Constructor func() []uint32
+}
+
+func Float32Buffer(name string, constructor func() []float32) Buffer {
+	return Buffer{
+		WGSLType: "f32",
+		Name:     name,
+		Constructor: func() []uint32 {
+			return float32SliceToBits(constructor())
+		},
+	}
+}
+
+func Uint32Buffer(name string, constructor func() []uint32) Buffer {
+	return Buffer{
+		WGSLType:    "u32",
+		Name:        name,
+		Constructor: constructor,
+	}
+}
+
+func Int32Buffer(name string, constructor func() []int32) Buffer {
+	return Buffer{
+		WGSLType: "i32",
+		Name:     name,
+		Constructor: func() []uint32 {
+			return int32SliceToUint32(constructor())
+		},
+	}
+}
+
+func float32SliceToBits(values []float32) []uint32 {
+	result := make([]uint32, len(values))
+	for i, x := range values {
+		result[i] = math.Float32bits(x)
+	}
+	return result
+}
+
+func int32SliceToUint32(values []int32) []uint32 {
+	result := make([]uint32, len(values))
+	for i, x := range values {
+		result[i] = uint32(x)
+	}
+	return result
 }
 
 type ShapeKernel struct {

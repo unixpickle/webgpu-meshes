@@ -91,8 +91,9 @@ type kernelExecutorRequest struct {
 }
 
 type kernelExecutorBuffer struct {
-	Name   string    `json:"name"`
-	Values []float32 `json:"values"`
+	WGSLType string   `json:"wgslType"`
+	Name     string   `json:"name"`
+	Values   []uint32 `json:"values"`
 }
 
 // ExecuteShapeKernel runs a ShapeKernel in Chromium WebGPU and returns either
@@ -114,8 +115,9 @@ func ExecuteShapeKernel(t testing.TB, k ShapeKernel, inputs ...Vector) KernelExe
 	for i, buf := range k.Buffers {
 		values := buf.Constructor()
 		request.Buffers[i] = kernelExecutorBuffer{
-			Name:   buf.Name,
-			Values: values,
+			WGSLType: buf.WGSLType,
+			Name:     buf.Name,
+			Values:   values,
 		}
 	}
 	for i, input := range inputs {
