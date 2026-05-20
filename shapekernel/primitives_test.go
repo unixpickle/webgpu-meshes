@@ -100,8 +100,6 @@ func testPrimitive2D(t *testing.T, shape primitive2D, solidKernel, sdfKernel Sha
 		sdfInputs = append(sdfInputs, Vec2{float32(point.X), float32(point.Y)})
 		sdfExpected = append(sdfExpected, float32(shape.SDF(point)))
 	}
-	vals := ExecuteShapeKernel(t, sdfKernel, sdfInputs...)
-	vals.ExpectFloats(t, sdfExpected, sdfEps)
 
 	var solidInputs []Vector
 	var solidExpected []bool
@@ -113,8 +111,16 @@ func testPrimitive2D(t *testing.T, shape primitive2D, solidKernel, sdfKernel Sha
 		solidInputs = append(solidInputs, Vec2{float32(point.X), float32(point.Y)})
 		solidExpected = append(solidExpected, shape.Contains(point))
 	}
-	vals = ExecuteShapeKernel(t, solidKernel, solidInputs...)
-	vals.ExpectBools(t, solidExpected)
+
+	t.Run("SDF", func(t *testing.T) {
+		vals := ExecuteShapeKernel(t, sdfKernel, sdfInputs...)
+		vals.ExpectFloats(t, sdfExpected, sdfEps)
+	})
+
+	t.Run("Solid", func(t *testing.T) {
+		vals := ExecuteShapeKernel(t, solidKernel, solidInputs...)
+		vals.ExpectBools(t, solidExpected)
+	})
 }
 
 func testPrimitive2DSDF(t *testing.T, shape primitive2D, sdfKernel ShapeKernel, boundaryEps, sdfEps float32) {

@@ -1,9 +1,5 @@
 package shapekernel
 
-import (
-	"fmt"
-)
-
 func flattenSegment3s(lines []Segment3) []float32 {
 	result := make([]float32, 0, len(lines)*6)
 	for _, line := range lines {
@@ -36,16 +32,11 @@ func SDFToSolid(k ShapeKernel) ShapeKernel {
 		panic("expected SDF kernel")
 	}
 	fnName := genFunctionID(&k.IDs, "sdf_to_solid")
-	k.Code += "\n" + fmt.Sprintf(
-		Dedent(`
-			fn %s(p: %s) -> bool {
-				return %s(p) >= 0.0;
+	AppendWGSL(&k, `
+			fn {{.Entrypoint}}(p: {{.ArgType}}) -> bool {
+				return {{.Inner}}(p) >= 0.0;
 			}
-		`),
-		fnName,
-		argType,
-		k.EntrypointName,
-	)
+		`, "Entrypoint", fnName, "ArgType", argType, "Inner", k.EntrypointName)
 	k.Kind = solidKind
 	k.EntrypointName = fnName
 	return k
@@ -57,17 +48,11 @@ func emptyKernel(kind ShapeKind, name, returnExpr string) ShapeKernel {
 	return ShapeKernel{
 		Kind: kind,
 		IDs:  ids,
-		Code: fmt.Sprintf(
-			Dedent(`
-				fn %s(p: %s) -> %s {
-					return %s;
+		Code: WGSL(`
+				fn {{.Entrypoint}}(p: {{.ArgType}}) -> {{.ReturnType}} {
+					return {{.ReturnExpr}};
 				}
-			`),
-			entrypointName,
-			kind.ArgType(),
-			kind.ReturnType(),
-			returnExpr,
-		),
+			`, "Entrypoint", entrypointName, "ArgType", kind.ArgType(), "ReturnType", kind.ReturnType(), "ReturnExpr", returnExpr),
 		EntrypointName: entrypointName,
 	}
 }
@@ -78,16 +63,12 @@ func CircleSolid(r float32) ShapeKernel {
 	return ShapeKernel{
 		Kind: Solid2D,
 		IDs:  ids,
-		Code: fmt.Sprintf(
-			Dedent(`
-				fn %s(p: vec2<f32>) -> bool {
+		Code: WGSL(`
+				fn {{.Entrypoint}}(p: vec2<f32>) -> bool {
 					let center = vec2<f32>(0.0, 0.0);
-					return distance(p, center) <= %f;
+					return distance(p, center) <= {{.Radius}};
 				}
-			`),
-			entrypointName,
-			r,
-		),
+			`, "Entrypoint", entrypointName, "Radius", r),
 		EntrypointName: entrypointName,
 	}
 }
@@ -98,20 +79,14 @@ func Teardrop2DSolid(r float32) ShapeKernel {
 	return ShapeKernel{
 		Kind: Solid2D,
 		IDs:  ids,
-		Code: fmt.Sprintf(
-			Dedent(`
-				fn %s(p: vec2<f32>) -> bool {
-					if (length(p) <= %f) {
+		Code: WGSL(`
+				fn {{.Entrypoint}}(p: vec2<f32>) -> bool {
+					if (length(p) <= {{.Radius}}) {
 						return true;
 					}
-					return p.y >= %f && p.y + abs(p.x) <= %f;
+					return p.y >= {{.YMin}} && p.y + abs(p.x) <= {{.DiagBound}};
 				}
-			`),
-			entrypointName,
-			r,
-			r/1.4142135623730951,
-			r*1.4142135623730951,
-		),
+			`, "Entrypoint", entrypointName, "Radius", r, "YMin", r/1.4142135623730951, "DiagBound", r*1.4142135623730951),
 		EntrypointName: entrypointName,
 	}
 }
@@ -122,16 +97,12 @@ func CircleSDF(r float32) ShapeKernel {
 	return ShapeKernel{
 		Kind: SDF2D,
 		IDs:  ids,
-		Code: fmt.Sprintf(
-			Dedent(`
-				fn %s(p: vec2<f32>) -> f32 {
+		Code: WGSL(`
+				fn {{.Entrypoint}}(p: vec2<f32>) -> f32 {
 					let center = vec2<f32>(0.0, 0.0);
-					return %f - distance(p, center);
+					return {{.Radius}} - distance(p, center);
 				}
-			`),
-			entrypointName,
-			r,
-		),
+			`, "Entrypoint", entrypointName, "Radius", r),
 		EntrypointName: entrypointName,
 	}
 }
@@ -142,16 +113,12 @@ func Rect2DSolid(sideLengths Vec2) ShapeKernel {
 	return ShapeKernel{
 		Kind: Solid2D,
 		IDs:  ids,
-		Code: fmt.Sprintf(
-			Dedent(`
-				fn %s(p: vec2<f32>) -> bool {
-					let halfSize = %s / 2.0;
+		Code: WGSL(`
+				fn {{.Entrypoint}}(p: vec2<f32>) -> bool {
+					let halfSize = {{.SideLengths}} / 2.0;
 					return all(abs(p) <= halfSize);
 				}
-			`),
-			entrypointName,
-			sideLengths.WebGPUVec(),
-		),
+			`, "Entrypoint", entrypointName, "SideLengths", sideLengths.WebGPUVec()),
 		EntrypointName: entrypointName,
 	}
 }
@@ -162,18 +129,14 @@ func Rect2DSDF(sideLengths Vec2) ShapeKernel {
 	return ShapeKernel{
 		Kind: SDF2D,
 		IDs:  ids,
-		Code: fmt.Sprintf(
-			Dedent(`
-				fn %s(p: vec2<f32>) -> f32 {
-					let halfSize = %s / 2.0;
+		Code: WGSL(`
+				fn {{.Entrypoint}}(p: vec2<f32>) -> f32 {
+					let halfSize = {{.SideLengths}} / 2.0;
 					let q = abs(p) - halfSize;
 					let outside = length(max(q, vec2<f32>(0.0, 0.0)));
 					return -outside - min(max(q.x, q.y), 0.0);
 				}
-			`),
-			entrypointName,
-			sideLengths.WebGPUVec(),
-		),
+			`, "Entrypoint", entrypointName, "SideLengths", sideLengths.WebGPUVec()),
 		EntrypointName: entrypointName,
 	}
 }
@@ -188,27 +151,20 @@ func Capsule2DSDF(p1, p2 Vec2, radius float32) ShapeKernel {
 	return ShapeKernel{
 		Kind: SDF2D,
 		IDs:  ids,
-		Code: fmt.Sprintf(
-			Dedent(`
-				fn %s(p: vec2<f32>) -> f32 {
-					let a = %s;
-					let b = %s;
+		Code: WGSL(`
+				fn {{.Entrypoint}}(p: vec2<f32>) -> f32 {
+					let a = {{.P1}};
+					let b = {{.P2}};
 					let ba = b - a;
 					let pa = p - a;
 					let lenSq = dot(ba, ba);
 					if (lenSq <= 0.0) {
-						return %f - distance(p, a);
+						return {{.Radius}} - distance(p, a);
 					}
 					let h = clamp(dot(pa, ba) / lenSq, 0.0, 1.0);
-					return %f - length(pa - ba * h);
+					return {{.Radius}} - length(pa - ba * h);
 				}
-			`),
-			entrypointName,
-			p1.WebGPUVec(),
-			p2.WebGPUVec(),
-			radius,
-			radius,
-		),
+			`, "Entrypoint", entrypointName, "P1", p1.WebGPUVec(), "P2", p2.WebGPUVec(), "Radius", radius),
 		EntrypointName: entrypointName,
 	}
 }
@@ -219,16 +175,12 @@ func SphereSolid(r float32) ShapeKernel {
 	return ShapeKernel{
 		Kind: Solid3D,
 		IDs:  ids,
-		Code: fmt.Sprintf(
-			Dedent(`
-				fn %s(p: vec3<f32>) -> bool {
+		Code: WGSL(`
+				fn {{.Entrypoint}}(p: vec3<f32>) -> bool {
 					let center = vec3<f32>(0.0, 0.0, 0.0);
-					return distance(p, center) <= %f;
+					return distance(p, center) <= {{.Radius}};
 				}
-			`),
-			entrypointName,
-			r,
-		),
+			`, "Entrypoint", entrypointName, "Radius", r),
 		EntrypointName: entrypointName,
 	}
 }
@@ -239,16 +191,12 @@ func Rect3DSolid(sideLengths Vec3) ShapeKernel {
 	return ShapeKernel{
 		Kind: Solid3D,
 		IDs:  ids,
-		Code: fmt.Sprintf(
-			Dedent(`
-				fn %s(p: vec3<f32>) -> bool {
-					let halfSize = %s / 2.0;
+		Code: WGSL(`
+				fn {{.Entrypoint}}(p: vec3<f32>) -> bool {
+					let halfSize = {{.SideLengths}} / 2.0;
 					return all(abs(p) <= halfSize);
 				}
-			`),
-			entrypointName,
-			sideLengths.WebGPUVec(),
-		),
+			`, "Entrypoint", entrypointName, "SideLengths", sideLengths.WebGPUVec()),
 		EntrypointName: entrypointName,
 	}
 }
@@ -259,18 +207,14 @@ func Rect3DSDF(sideLengths Vec3) ShapeKernel {
 	return ShapeKernel{
 		Kind: SDF3D,
 		IDs:  ids,
-		Code: fmt.Sprintf(
-			Dedent(`
-				fn %s(p: vec3<f32>) -> f32 {
-					let halfSize = %s / 2.0;
+		Code: WGSL(`
+				fn {{.Entrypoint}}(p: vec3<f32>) -> f32 {
+					let halfSize = {{.SideLengths}} / 2.0;
 					let q = abs(p) - halfSize;
 					let outside = length(max(q, vec3<f32>(0.0, 0.0, 0.0)));
 					return -outside - min(max(max(q.x, q.y), q.z), 0.0);
 				}
-			`),
-			entrypointName,
-			sideLengths.WebGPUVec(),
-		),
+			`, "Entrypoint", entrypointName, "SideLengths", sideLengths.WebGPUVec()),
 		EntrypointName: entrypointName,
 	}
 }
@@ -296,8 +240,8 @@ func LineJoinSolid(r float32, lines ...Segment3) ShapeKernel {
 				return lineData
 			}),
 		},
-		Code: Dedent(fmt.Sprintf(`
-			fn %s(p: vec3<f32>, p1: vec3<f32>, p2: vec3<f32>) -> f32 {
+		Code: WGSL(`
+			fn {{.SegmentDistance}}(p: vec3<f32>, p1: vec3<f32>, p2: vec3<f32>) -> f32 {
 				let v = p2 - p1;
 				let vNormSq = dot(v, v);
 				var t = 0.0;
@@ -308,20 +252,18 @@ func LineJoinSolid(r float32, lines ...Segment3) ShapeKernel {
 				return distance(p, closest);
 			}
 
-				fn %s(p: vec3<f32>) -> bool {
-					let numSegs = %du;
+				fn {{.Entrypoint}}(p: vec3<f32>) -> bool {
+					let numSegs = {{.NumSegs}}u;
 					for (var i = 0u; i < numSegs; i++) {
-						let p1 = vec3<f32>(%s[i*6], %s[i*6+1], %s[i*6+2]);
-						let p2 = vec3<f32>(%s[i*6+3], %s[i*6+4], %s[i*6+5]);
-						if (%s(p, p1, p2) <= %f) {
+						let p1 = vec3<f32>({{.Segments}}[i*6], {{.Segments}}[i*6+1], {{.Segments}}[i*6+2]);
+						let p2 = vec3<f32>({{.Segments}}[i*6+3], {{.Segments}}[i*6+4], {{.Segments}}[i*6+5]);
+						if ({{.SegmentDistance}}(p, p1, p2) <= {{.Radius}}) {
 							return true;
 						}
 					}
 					return false;
 				}
-		`, segmentDistanceName, entrypointName, len(lines),
-			bufName, bufName, bufName, bufName, bufName, bufName,
-			segmentDistanceName, r)),
+		`, "SegmentDistance", segmentDistanceName, "Entrypoint", entrypointName, "NumSegs", len(lines), "Segments", bufName, "Radius", r),
 		EntrypointName: entrypointName,
 	}
 }
@@ -344,47 +286,47 @@ func L1LineJoinSolid(r float32, lines ...Segment3) ShapeKernel {
 				return lineData
 			}),
 		},
-		Code: Dedent(fmt.Sprintf(`
-			fn %s(p1: vec3<f32>, p2: vec3<f32>) -> f32 {
+		Code: WGSL(`
+			fn {{.L1Distance}}(p1: vec3<f32>, p2: vec3<f32>) -> f32 {
 				let delta = abs(p1 - p2);
 				return delta.x + delta.y + delta.z;
 			}
 
-			fn %s(p: vec3<f32>, p1: vec3<f32>, p2: vec3<f32>) -> f32 {
+			fn {{.SegmentL1Distance}}(p: vec3<f32>, p1: vec3<f32>, p2: vec3<f32>) -> f32 {
 				let v = p2 - p1;
-				var best = min(%s(p, p1), %s(p, p2));
+				var best = min({{.L1Distance}}(p, p1), {{.L1Distance}}(p, p2));
 
 				if (abs(v.x) > 1e-12) {
 					let t = (p.x - p1.x) / v.x;
 					if (t > 0.0 && t < 1.0) {
-						best = min(best, %s(p, p1 + v * t));
+						best = min(best, {{.L1Distance}}(p, p1 + v * t));
 					}
 				}
 				if (abs(v.y) > 1e-12) {
 					let t = (p.y - p1.y) / v.y;
 					if (t > 0.0 && t < 1.0) {
-						best = min(best, %s(p, p1 + v * t));
+						best = min(best, {{.L1Distance}}(p, p1 + v * t));
 					}
 				}
 				if (abs(v.z) > 1e-12) {
 					let t = (p.z - p1.z) / v.z;
 					if (t > 0.0 && t < 1.0) {
-						best = min(best, %s(p, p1 + v * t));
+						best = min(best, {{.L1Distance}}(p, p1 + v * t));
 					}
 				}
 
 				return best;
 			}
 
-				fn %s(p: vec3<f32>) -> bool {
-					let numSegs = %du;
+				fn {{.Entrypoint}}(p: vec3<f32>) -> bool {
+					let numSegs = {{.NumSegs}}u;
 					for (var i = 0u; i < numSegs; i++) {
-						let p1 = vec3<f32>(%s[i*6], %s[i*6+1], %s[i*6+2]);
-						let p2 = vec3<f32>(%s[i*6+3], %s[i*6+4], %s[i*6+5]);
+						let p1 = vec3<f32>({{.Segments}}[i*6], {{.Segments}}[i*6+1], {{.Segments}}[i*6+2]);
+						let p2 = vec3<f32>({{.Segments}}[i*6+3], {{.Segments}}[i*6+4], {{.Segments}}[i*6+5]);
 						let axisVec = p1 - p2;
 					let axisLen = length(axisVec);
 					if (axisLen <= 0.0) {
-						if (%s(p, p1) < %f) {
+						if ({{.L1Distance}}(p, p1) < {{.Radius}}) {
 							return true;
 						}
 						continue;
@@ -392,18 +334,23 @@ func L1LineJoinSolid(r float32, lines ...Segment3) ShapeKernel {
 
 					let axis = axisVec / axisLen;
 					let axial = dot(p - p2, axis);
-					if (axial >= 0.0 && axial <= axisLen && %s(p, p1, p2) < %f) {
+					if (axial >= 0.0 && axial <= axisLen && {{.SegmentL1Distance}}(p, p1, p2) < {{.Radius}}) {
 						return true;
 					}
-					if (%s(p, p1) < %f || %s(p, p2) < %f) {
+					if ({{.L1Distance}}(p, p1) < {{.Radius}} || {{.L1Distance}}(p, p2) < {{.Radius}}) {
 						return true;
 					}
 					}
 					return false;
 				}
-		`, l1DistanceName, segmentL1DistanceName, l1DistanceName, l1DistanceName, l1DistanceName, l1DistanceName, l1DistanceName, entrypointName, len(lines),
-			bufName, bufName, bufName, bufName, bufName, bufName,
-			l1DistanceName, r, segmentL1DistanceName, r, l1DistanceName, r, l1DistanceName, r)),
+		`,
+			"L1Distance", l1DistanceName,
+			"SegmentL1Distance", segmentL1DistanceName,
+			"Entrypoint", entrypointName,
+			"NumSegs", len(lines),
+			"Segments", bufName,
+			"Radius", r,
+		),
 		EntrypointName: entrypointName,
 	}
 }
@@ -414,27 +361,20 @@ func Capsule3DSDF(p1, p2 Vec3, radius float32) ShapeKernel {
 	return ShapeKernel{
 		Kind: SDF3D,
 		IDs:  ids,
-		Code: fmt.Sprintf(
-			Dedent(`
-				fn %s(p: vec3<f32>) -> f32 {
-					let a = %s;
-					let b = %s;
+		Code: WGSL(`
+				fn {{.Entrypoint}}(p: vec3<f32>) -> f32 {
+					let a = {{.P1}};
+					let b = {{.P2}};
 					let ba = b - a;
 					let pa = p - a;
 					let lenSq = dot(ba, ba);
 					if (lenSq <= 0.0) {
-						return %f - distance(p, a);
+						return {{.Radius}} - distance(p, a);
 					}
 					let h = clamp(dot(pa, ba) / lenSq, 0.0, 1.0);
-					return %f - length(pa - ba * h);
+					return {{.Radius}} - length(pa - ba * h);
 				}
-			`),
-			entrypointName,
-			p1.WebGPUVec(),
-			p2.WebGPUVec(),
-			radius,
-			radius,
-		),
+			`, "Entrypoint", entrypointName, "P1", p1.WebGPUVec(), "P2", p2.WebGPUVec(), "Radius", radius),
 		EntrypointName: entrypointName,
 	}
 }
@@ -445,15 +385,14 @@ func CylinderSolid(p1, p2 Vec3, radius float32) ShapeKernel {
 	return ShapeKernel{
 		Kind: Solid3D,
 		IDs:  ids,
-		Code: fmt.Sprintf(
-			Dedent(`
-				fn %s(p: vec3<f32>) -> bool {
-					let a = %s;
-					let b = %s;
+		Code: WGSL(`
+				fn {{.Entrypoint}}(p: vec3<f32>) -> bool {
+					let a = {{.P1}};
+					let b = {{.P2}};
 					let ba = b - a;
 					let h = length(ba);
 					if (h <= 0.0) {
-						return distance(p, a) <= %f;
+						return distance(p, a) <= {{.Radius}};
 					}
 					let axis = ba / h;
 					let axial = dot(p - a, axis);
@@ -461,15 +400,9 @@ func CylinderSolid(p1, p2 Vec3, radius float32) ShapeKernel {
 						return false;
 					}
 					let projection = a + axis * axial;
-					return distance(p, projection) <= %f;
+					return distance(p, projection) <= {{.Radius}};
 				}
-			`),
-			entrypointName,
-			p1.WebGPUVec(),
-			p2.WebGPUVec(),
-			radius,
-			radius,
-		),
+			`, "Entrypoint", entrypointName, "P1", p1.WebGPUVec(), "P2", p2.WebGPUVec(), "Radius", radius),
 		EntrypointName: entrypointName,
 	}
 }
@@ -484,15 +417,14 @@ func ConeSolid(tip, base Vec3, radius float32) ShapeKernel {
 	return ShapeKernel{
 		Kind: Solid3D,
 		IDs:  ids,
-		Code: fmt.Sprintf(
-			Dedent(`
-				fn %s(p: vec3<f32>) -> bool {
-					let tip = %s;
-					let base = %s;
+		Code: WGSL(`
+				fn {{.Entrypoint}}(p: vec3<f32>) -> bool {
+					let tip = {{.Tip}};
+					let base = {{.Base}};
 					let axisVec = tip - base;
 					let h = length(axisVec);
 					if (h <= 0.0) {
-						return distance(p, tip) <= %f;
+						return distance(p, tip) <= {{.Radius}};
 					}
 					let axis = axisVec / h;
 					let axial = dot(p - base, axis);
@@ -501,15 +433,9 @@ func ConeSolid(tip, base Vec3, radius float32) ShapeKernel {
 						return false;
 					}
 					let projection = base + axis * axial;
-					return distance(p, projection) <= %f * radiusFrac;
+					return distance(p, projection) <= {{.Radius}} * radiusFrac;
 				}
-			`),
-			entrypointName,
-			tip.WebGPUVec(),
-			base.WebGPUVec(),
-			radius,
-			radius,
-		),
+			`, "Entrypoint", entrypointName, "Tip", tip.WebGPUVec(), "Base", base.WebGPUVec(), "Radius", radius),
 		EntrypointName: entrypointName,
 	}
 }
@@ -524,14 +450,13 @@ func ConeSliceSolid(p1, p2 Vec3, r1, r2 float32) ShapeKernel {
 	return ShapeKernel{
 		Kind: Solid3D,
 		IDs:  ids,
-		Code: fmt.Sprintf(
-			Dedent(`
-				fn %s(p: vec3<f32>) -> bool {
-					let a = %s;
-					let b = %s;
+		Code: WGSL(`
+				fn {{.Entrypoint}}(p: vec3<f32>) -> bool {
+					let a = {{.P1}};
+					let b = {{.P2}};
 					let ba = b - a;
 					let h = length(ba);
-					let maxRadius = max(%f, %f);
+					let maxRadius = max({{.Radius1}}, {{.Radius2}});
 					if (h <= 0.0) {
 						return distance(p, a) <= maxRadius;
 					}
@@ -542,18 +467,10 @@ func ConeSliceSolid(p1, p2 Vec3, r1, r2 float32) ShapeKernel {
 						return false;
 					}
 					let projection = a + axis * axial;
-					let radius = %f * radiusFrac + %f * (1.0 - radiusFrac);
+					let radius = {{.Radius1}} * radiusFrac + {{.Radius2}} * (1.0 - radiusFrac);
 					return distance(p, projection) <= radius;
 				}
-			`),
-			entrypointName,
-			p1.WebGPUVec(),
-			p2.WebGPUVec(),
-			r1,
-			r2,
-			r1,
-			r2,
-		),
+			`, "Entrypoint", entrypointName, "P1", p1.WebGPUVec(), "P2", p2.WebGPUVec(), "Radius1", r1, "Radius2", r2),
 		EntrypointName: entrypointName,
 	}
 }
@@ -564,14 +481,13 @@ func ConeSliceSDF(p1, p2 Vec3, r1, r2 float32) ShapeKernel {
 	return ShapeKernel{
 		Kind: SDF3D,
 		IDs:  ids,
-		Code: fmt.Sprintf(
-			Dedent(`
-				fn %s(p: vec3<f32>) -> f32 {
-					let a = %s;
-					let b = %s;
+		Code: WGSL(`
+				fn {{.Entrypoint}}(p: vec3<f32>) -> f32 {
+					let a = {{.P1}};
+					let b = {{.P2}};
 					let ba = b - a;
 					let h = length(ba);
-					let maxRadius = max(%f, %f);
+					let maxRadius = max({{.Radius1}}, {{.Radius2}});
 					if (h <= 0.0) {
 						return maxRadius - distance(p, a);
 					}
@@ -585,13 +501,13 @@ func ConeSliceSDF(p1, p2 Vec3, r1, r2 float32) ShapeKernel {
 					var inside = false;
 					if (axial >= 0.0 && axial <= h) {
 						let axialFrac = axial / h;
-						let radius = %f + (%f - %f) * axialFrac;
+						let radius = {{.Radius1}} + ({{.Radius2}} - {{.Radius1}}) * axialFrac;
 						inside = radial <= radius;
 					}
 
 					let q = vec2<f32>(axial, radial);
-					let sideA = vec2<f32>(0.0, %f);
-					let sideB = vec2<f32>(h, %f);
+					let sideA = vec2<f32>(0.0, {{.Radius1}});
+					let sideB = vec2<f32>(h, {{.Radius2}});
 					let sideBA = sideB - sideA;
 					let sidePASeg = q - sideA;
 					let sideLenSq = dot(sideBA, sideBA);
@@ -603,18 +519,18 @@ func ConeSliceSDF(p1, p2 Vec3, r1, r2 float32) ShapeKernel {
 
 					let cap1Axial = q.x;
 					var cap1Dist = length(q);
-					if (q.y < %f) {
+					if (q.y < {{.Radius1}}) {
 						cap1Dist = abs(cap1Axial);
 					} else {
-						cap1Dist = length(vec2<f32>(cap1Axial, q.y - %f));
+						cap1Dist = length(vec2<f32>(cap1Axial, q.y - {{.Radius1}}));
 					}
 
 					let cap2Axial = q.x - h;
 					var cap2Dist = length(vec2<f32>(cap2Axial, q.y));
-					if (q.y < %f) {
+					if (q.y < {{.Radius2}}) {
 						cap2Dist = abs(cap2Axial);
 					} else {
-						cap2Dist = length(vec2<f32>(cap2Axial, q.y - %f));
+						cap2Dist = length(vec2<f32>(cap2Axial, q.y - {{.Radius2}}));
 					}
 
 					let unsignedDist = min(sideDist, min(cap1Dist, cap2Dist));
@@ -624,22 +540,7 @@ func ConeSliceSDF(p1, p2 Vec3, r1, r2 float32) ShapeKernel {
 						return -unsignedDist;
 					}
 				}
-			`),
-			entrypointName,
-			p1.WebGPUVec(),
-			p2.WebGPUVec(),
-			r1,
-			r2,
-			r1,
-			r2,
-			r1,
-			r1,
-			r2,
-			r1,
-			r1,
-			r2,
-			r2,
-		),
+			`, "Entrypoint", entrypointName, "P1", p1.WebGPUVec(), "P2", p2.WebGPUVec(), "Radius1", r1, "Radius2", r2),
 		EntrypointName: entrypointName,
 	}
 }
@@ -650,16 +551,12 @@ func SphereSDF(r float32) ShapeKernel {
 	return ShapeKernel{
 		Kind: SDF3D,
 		IDs:  ids,
-		Code: fmt.Sprintf(
-			Dedent(`
-				fn %s(p: vec3<f32>) -> f32 {
+		Code: WGSL(`
+				fn {{.Entrypoint}}(p: vec3<f32>) -> f32 {
 					let center = vec3<f32>(0.0, 0.0, 0.0);
-					return %f - distance(p, center);
+					return {{.Radius}} - distance(p, center);
 				}
-			`),
-			entrypointName,
-			r,
-		),
+			`, "Entrypoint", entrypointName, "Radius", r),
 		EntrypointName: entrypointName,
 	}
 }

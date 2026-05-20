@@ -1,9 +1,6 @@
 package shapekernel
 
-import (
-	"fmt"
-	"strings"
-)
+import "strings"
 
 func InversePowerMetaballFalloffFunc(power float32) ShapeKernel {
 	if power <= 0 {
@@ -14,18 +11,14 @@ func InversePowerMetaballFalloffFunc(power float32) ShapeKernel {
 	return ShapeKernel{
 		Kind: FalloffFunc,
 		IDs:  ids,
-		Code: fmt.Sprintf(
-			Dedent(`
-				fn %s(r: f32) -> f32 {
+		Code: WGSL(`
+				fn {{.Entrypoint}}(r: f32) -> f32 {
 					if (r <= 0.0) {
 						return 1e30;
 					}
-					return pow(r, -%f);
+					return pow(r, -{{.Power}});
 				}
-			`),
-			entrypointName,
-			power,
-		),
+			`, "Entrypoint", entrypointName, "Power", power),
 		EntrypointName: entrypointName,
 	}
 }
@@ -56,17 +49,14 @@ func ExponentialMetaballFalloffFunc() ShapeKernel {
 	return ShapeKernel{
 		Kind: FalloffFunc,
 		IDs:  ids,
-		Code: fmt.Sprintf(
-			Dedent(`
-				fn %s(r: f32) -> f32 {
+		Code: WGSL(`
+				fn {{.Entrypoint}}(r: f32) -> f32 {
 					if (r <= 0.0) {
 						return 1.0;
 					}
 					return exp(-r);
 				}
-			`),
-			entrypointName,
-		),
+			`, "Entrypoint", entrypointName),
 		EntrypointName: entrypointName,
 	}
 }
@@ -77,17 +67,14 @@ func GaussianMetaballFalloffFunc() ShapeKernel {
 	return ShapeKernel{
 		Kind: FalloffFunc,
 		IDs:  ids,
-		Code: fmt.Sprintf(
-			Dedent(`
-				fn %s(r: f32) -> f32 {
+		Code: WGSL(`
+				fn {{.Entrypoint}}(r: f32) -> f32 {
 					if (r <= 0.0) {
 						return 1.0;
 					}
 					return exp(-(r * r));
 				}
-			`),
-			entrypointName,
-		),
+			`, "Entrypoint", entrypointName),
 		EntrypointName: entrypointName,
 	}
 }
@@ -101,25 +88,19 @@ func WyvillMetaballFalloffFunc(d float32) ShapeKernel {
 	return ShapeKernel{
 		Kind: FalloffFunc,
 		IDs:  ids,
-		Code: fmt.Sprintf(
-			Dedent(`
-				fn %s(r: f32) -> f32 {
+		Code: WGSL(`
+				fn {{.Entrypoint}}(r: f32) -> f32 {
 					if (r < 0.0) {
 						return 1e30;
 					}
-					if (r >= %f) {
+					if (r >= {{.Radius}}) {
 						return 0.0;
 					}
-					let ratio2 = (r * r) / (%f * %f);
+					let ratio2 = (r * r) / ({{.Radius}} * {{.Radius}});
 					let value = 1.0 - ratio2;
 					return value * value;
 				}
-			`),
-			entrypointName,
-			d,
-			d,
-			d,
-		),
+			`, "Entrypoint", entrypointName, "Radius", d),
 		EntrypointName: entrypointName,
 	}
 }
@@ -136,16 +117,11 @@ func SDFToMetaball(k ShapeKernel) ShapeKernel {
 	}
 
 	fnName := genFunctionID(&k.IDs, "sdf_to_metaball")
-	k.Code += "\n" + fmt.Sprintf(
-		Dedent(`
-			fn %s(p: %s) -> f32 {
-				return -%s(p);
+	AppendWGSL(&k, `
+			fn {{.Entrypoint}}(p: {{.ArgType}}) -> f32 {
+				return -{{.Inner}}(p);
 			}
-		`),
-		fnName,
-		k.Kind.ArgType(),
-		k.EntrypointName,
-	)
+		`, "Entrypoint", fnName, "ArgType", k.Kind.ArgType(), "Inner", k.EntrypointName)
 	k.Kind = metaballKind
 	k.EntrypointName = fnName
 	return k
@@ -187,13 +163,13 @@ func WeightedMetaballSolid(
 
 	k := metaballs[0]
 	k.Buffers = append([]Buffer{}, k.Buffers...)
-	metaballCalls := []string{fmt.Sprintf("%s(p)", k.EntrypointName)}
+	metaballCalls := []string{Template("{{.Fn}}(p)", "Fn", k.EntrypointName)}
 	for i := 1; i < len(metaballs); i++ {
 		nextK := ShiftIDs(metaballs[i], k.IDs)
 		k.IDs = nextK.IDs
 		k.Buffers = append(k.Buffers, nextK.Buffers...)
 		k.Code += "\n" + nextK.Code
-		metaballCalls = append(metaballCalls, fmt.Sprintf("%s(p)", nextK.EntrypointName))
+		metaballCalls = append(metaballCalls, Template("{{.Fn}}(p)", "Fn", nextK.EntrypointName))
 	}
 
 	falloff = ShiftIDs(falloff, k.IDs)
@@ -202,7 +178,11 @@ func WeightedMetaballSolid(
 	k.Code += "\n" + falloff.Code
 	sumCode := make([]string, len(metaballCalls))
 	for i, call := range metaballCalls {
-		sumCode[i] = fmt.Sprintf("%f * %s(%s)", weights[i], falloff.EntrypointName, call)
+		sumCode[i] = Template("{{.Weight}} * {{.Falloff}}({{.Call}})",
+			"Weight", weights[i],
+			"Falloff", falloff.EntrypointName,
+			"Call", call,
+		)
 	}
 
 	solidKind := Solid2D
@@ -210,19 +190,18 @@ func WeightedMetaballSolid(
 		solidKind = Solid3D
 	}
 	fnName := genFunctionID(&k.IDs, "metaball_solid")
-	k.Code += "\n" + fmt.Sprintf(
-		Dedent(`
-			fn %s(p: %s) -> bool {
-				let threshold = %s(%f);
-				let sum = %s;
+	AppendWGSL(&k, `
+			fn {{.Entrypoint}}(p: {{.ArgType}}) -> bool {
+				let threshold = {{.Falloff}}({{.RadiusThreshold}});
+				let sum = {{.SumExpr}};
 				return sum > threshold;
 			}
-		`),
-		fnName,
-		kind.ArgType(),
-		falloff.EntrypointName,
-		radiusThreshold,
-		strings.Join(sumCode, " + "),
+		`,
+		"Entrypoint", fnName,
+		"ArgType", kind.ArgType(),
+		"Falloff", falloff.EntrypointName,
+		"RadiusThreshold", radiusThreshold,
+		"SumExpr", strings.Join(sumCode, " + "),
 	)
 	k.Kind = solidKind
 	k.EntrypointName = fnName

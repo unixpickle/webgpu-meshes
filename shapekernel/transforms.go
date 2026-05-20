@@ -1,9 +1,6 @@
 package shapekernel
 
-import (
-	"fmt"
-	"math"
-)
+import "math"
 
 func unitAxis2D(axis Vec2) Vec2 {
 	axisNorm := math.Sqrt(float64(axis[0]*axis[0] + axis[1]*axis[1]))
@@ -56,24 +53,17 @@ func Rotate2D(k ShapeKernel, angle float32) ShapeKernel {
 		panic("Rotate2D requires a 2D non-falloff kernel")
 	}
 	fnName := genFunctionID(&k.IDs, "rotate2d")
-	k.Code += "\n" + fmt.Sprintf(
-		Dedent(`
-			fn %s(p: vec2<f32>) -> %s {
-				let cosA = cos(%f);
-				let sinA = sin(%f);
+	AppendWGSL(&k, `
+			fn {{.Entrypoint}}(p: vec2<f32>) -> {{.ReturnType}} {
+				let cosA = cos({{.Angle}});
+				let sinA = sin({{.Angle}});
 				let newP = vec2<f32>(
 					cosA * p.x + sinA * p.y,
 					-sinA * p.x + cosA * p.y
 				);
-				return %s(newP);
+				return {{.Inner}}(newP);
 			}
-		`),
-		fnName,
-		k.Kind.ReturnType(),
-		angle,
-		angle,
-		k.EntrypointName,
-	)
+		`, "Entrypoint", fnName, "ReturnType", k.Kind.ReturnType(), "Angle", angle, "Inner", k.EntrypointName)
 	k.EntrypointName = fnName
 	return k
 }
@@ -84,23 +74,15 @@ func Rotate3D(k ShapeKernel, axis Vec3, angle float32) ShapeKernel {
 	}
 	unitAxis := unitAxis3D(axis)
 	fnName := genFunctionID(&k.IDs, "rotate3d")
-	k.Code += "\n" + fmt.Sprintf(
-		Dedent(`
-			fn %s(p: vec3<f32>) -> %s {
-				let axis = %s;
-				let cosA = cos(%f);
-				let sinA = sin(%f);
+	AppendWGSL(&k, `
+			fn {{.Entrypoint}}(p: vec3<f32>) -> {{.ReturnType}} {
+				let axis = {{.Axis}};
+				let cosA = cos({{.Angle}});
+				let sinA = sin({{.Angle}});
 				let newP = p * cosA - cross(axis, p) * sinA + axis * dot(axis, p) * (1.0 - cosA);
-				return %s(newP);
+				return {{.Inner}}(newP);
 			}
-		`),
-		fnName,
-		k.Kind.ReturnType(),
-		unitAxis.WebGPUVec(),
-		angle,
-		angle,
-		k.EntrypointName,
-	)
+		`, "Entrypoint", fnName, "ReturnType", k.Kind.ReturnType(), "Axis", unitAxis.WebGPUVec(), "Angle", angle, "Inner", k.EntrypointName)
 	k.EntrypointName = fnName
 	return k
 }
@@ -111,19 +93,13 @@ func Mirror2D(k ShapeKernel, axis Vec2) ShapeKernel {
 	}
 	unitAxis := unitAxis2D(axis)
 	fnName := genFunctionID(&k.IDs, "mirror2d")
-	k.Code += "\n" + fmt.Sprintf(
-		Dedent(`
-			fn %s(p: vec2<f32>) -> %s {
-				let axis = %s;
+	AppendWGSL(&k, `
+			fn {{.Entrypoint}}(p: vec2<f32>) -> {{.ReturnType}} {
+				let axis = {{.Axis}};
 				let newP = p - 2.0 * dot(axis, p) * axis;
-				return %s(newP);
+				return {{.Inner}}(newP);
 			}
-		`),
-		fnName,
-		k.Kind.ReturnType(),
-		unitAxis.WebGPUVec(),
-		k.EntrypointName,
-	)
+		`, "Entrypoint", fnName, "ReturnType", k.Kind.ReturnType(), "Axis", unitAxis.WebGPUVec(), "Inner", k.EntrypointName)
 	k.EntrypointName = fnName
 	return k
 }
@@ -134,19 +110,13 @@ func Mirror3D(k ShapeKernel, axis Vec3) ShapeKernel {
 	}
 	unitAxis := unitAxis3D(axis)
 	fnName := genFunctionID(&k.IDs, "mirror3d")
-	k.Code += "\n" + fmt.Sprintf(
-		Dedent(`
-			fn %s(p: vec3<f32>) -> %s {
-				let axis = %s;
+	AppendWGSL(&k, `
+			fn {{.Entrypoint}}(p: vec3<f32>) -> {{.ReturnType}} {
+				let axis = {{.Axis}};
 				let newP = p - 2.0 * dot(axis, p) * axis;
-				return %s(newP);
+				return {{.Inner}}(newP);
 			}
-		`),
-		fnName,
-		k.Kind.ReturnType(),
-		unitAxis.WebGPUVec(),
-		k.EntrypointName,
-	)
+		`, "Entrypoint", fnName, "ReturnType", k.Kind.ReturnType(), "Axis", unitAxis.WebGPUVec(), "Inner", k.EntrypointName)
 	k.EntrypointName = fnName
 	return k
 }
@@ -156,19 +126,12 @@ func Translate(k ShapeKernel, offset Vector) ShapeKernel {
 		panic("cannot translate falloff functions")
 	}
 	fnName := genFunctionID(&k.IDs, "translate")
-	k.Code += "\n" + fmt.Sprintf(
-		Dedent(`
-			fn %s(p: %s) -> %s {
-				let newP = p - %s;
-				return %s(newP);
+	AppendWGSL(&k, `
+			fn {{.Entrypoint}}(p: {{.ArgType}}) -> {{.ReturnType}} {
+				let newP = p - {{.Offset}};
+				return {{.Inner}}(newP);
 			}
-		`),
-		fnName,
-		k.Kind.ArgType(),
-		k.Kind.ReturnType(),
-		offset.WebGPUVec(),
-		k.EntrypointName,
-	)
+		`, "Entrypoint", fnName, "ArgType", k.Kind.ArgType(), "ReturnType", k.Kind.ReturnType(), "Offset", offset.WebGPUVec(), "Inner", k.EntrypointName)
 	k.EntrypointName = fnName
 	return k
 }
@@ -190,22 +153,21 @@ func Scale(k ShapeKernel, scales Vector) ShapeKernel {
 	absScale := absScaleFactor(k.Kind, scales)
 	scaleCode := ""
 	if k.Kind == SDF2D || k.Kind == SDF3D {
-		scaleCode = fmt.Sprintf(" * %f", absScale)
+		scaleCode = Template(" * {{.AbsScale}}", "AbsScale", absScale)
 	}
 	fnName := genFunctionID(&k.IDs, "scale")
-	k.Code += "\n" + fmt.Sprintf(
-		Dedent(`
-			fn %s(p: %s) -> %s {
-				let newP = p / %s;
-				return %s(newP)%s;
+	AppendWGSL(&k, `
+			fn {{.Entrypoint}}(p: {{.ArgType}}) -> {{.ReturnType}} {
+				let newP = p / {{.Scales}};
+				return {{.Inner}}(newP){{.ScaleCode}};
 			}
-		`),
-		fnName,
-		k.Kind.ArgType(),
-		k.Kind.ReturnType(),
-		scales.WebGPUVec(),
-		k.EntrypointName,
-		scaleCode,
+		`,
+		"Entrypoint", fnName,
+		"ArgType", k.Kind.ArgType(),
+		"ReturnType", k.Kind.ReturnType(),
+		"Scales", scales.WebGPUVec(),
+		"Inner", k.EntrypointName,
+		"ScaleCode", scaleCode,
 	)
 	k.EntrypointName = fnName
 	return k
@@ -216,17 +178,11 @@ func offsetSDF(k ShapeKernel, offset float32, name string) ShapeKernel {
 		panic("expected SDF kernel")
 	}
 	fnName := genFunctionID(&k.IDs, name+"_sdf")
-	k.Code += "\n" + fmt.Sprintf(
-		Dedent(`
-			fn %s(p: %s) -> f32 {
-				return %s(p) + %f;
+	AppendWGSL(&k, `
+			fn {{.Entrypoint}}(p: {{.ArgType}}) -> f32 {
+				return {{.Inner}}(p) + {{.Offset}};
 			}
-		`),
-		fnName,
-		k.Kind.ArgType(),
-		k.EntrypointName,
-		offset,
-	)
+		`, "Entrypoint", fnName, "ArgType", k.Kind.ArgType(), "Inner", k.EntrypointName, "Offset", offset)
 	k.EntrypointName = fnName
 	return k
 }

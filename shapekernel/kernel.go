@@ -1,7 +1,6 @@
 package shapekernel
 
 import (
-	"fmt"
 	"math"
 	"regexp"
 	"strconv"
@@ -39,7 +38,7 @@ func (s ShapeKind) ArgType() string {
 	if s == FalloffFunc {
 		return "f32"
 	}
-	return fmt.Sprintf("vec%d<f32>", s.Dim())
+	return Template("vec{{.Dim}}<f32>", "Dim", s.Dim())
 }
 
 func (s ShapeKind) Dim() int {
@@ -153,13 +152,13 @@ func offsetSymbolNumbers(code string, prefix string, offset int) string {
 }
 
 func genFunctionID(idt *IDTracker, name string) string {
-	result := fmt.Sprintf("sym_fn_%d_%s", idt.NextFnID, name)
+	result := "sym_fn_" + strconv.Itoa(idt.NextFnID) + "_" + name
 	idt.NextFnID += 1
 	return result
 }
 
 func genBufferID(idt *IDTracker, name string) string {
-	result := fmt.Sprintf("sym_buf_%d_%s", idt.NextBufferID, name)
+	result := "sym_buf_" + strconv.Itoa(idt.NextBufferID) + "_" + name
 	idt.NextBufferID += 1
 	return result
 }

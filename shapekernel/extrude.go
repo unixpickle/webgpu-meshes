@@ -1,9 +1,6 @@
 package shapekernel
 
-import (
-	"fmt"
-	"math"
-)
+import "math"
 
 const (
 	InsetExtrudeChamfer InsetFunction = "chamfer"
@@ -28,42 +25,39 @@ func LinearExtrudeSolid(k ShapeKernel, height float32, center bool, twist float3
 	}
 	z0, z1 := linearExtrudeZBounds(height, center)
 	fnName := genFunctionID(&k.IDs, "linear_extrude")
-	k.Code += "\n" + fmt.Sprintf(
-		Dedent(`
-			fn %s(p: vec3<f32>) -> bool {
-				if (p.z < %f || p.z > %f) {
+	AppendWGSL(&k, `
+			fn {{.Entrypoint}}(p: vec3<f32>) -> bool {
+				if (p.z < {{.ZMin}} || p.z > {{.ZMax}}) {
 					return false;
 				}
 
 				var t = 0.0;
-				if (%f > 0.0) {
-					t = (p.z - %f) / %f;
+				if ({{.Height}} > 0.0) {
+					t = (p.z - {{.ZMin}}) / {{.Height}};
 				}
 
-				let sx = 1.0 + t * (%f - 1.0);
-				let sy = 1.0 + t * (%f - 1.0);
+				let sx = 1.0 + t * ({{.ScaleX}} - 1.0);
+				let sy = 1.0 + t * ({{.ScaleY}} - 1.0);
 				if (sx == 0.0 || sy == 0.0) {
 					return false;
 				}
 
-				let angle = %f * t;
+				let angle = {{.Twist}} * t;
 				let cosA = cos(angle);
 				let sinA = sin(angle);
 				let rx = p.x * cosA - p.y * sinA;
 				let ry = p.x * sinA + p.y * cosA;
-				return %s(vec2<f32>(rx / sx, ry / sy));
+				return {{.Inner}}(vec2<f32>(rx / sx, ry / sy));
 			}
-		`),
-		fnName,
-		z0,
-		z1,
-		height,
-		z0,
-		height,
-		scale[0],
-		scale[1],
-		twist,
-		k.EntrypointName,
+		`,
+		"Entrypoint", fnName,
+		"ZMin", z0,
+		"ZMax", z1,
+		"Height", height,
+		"ScaleX", scale[0],
+		"ScaleY", scale[1],
+		"Twist", twist,
+		"Inner", k.EntrypointName,
 	)
 	k.Kind = Solid3D
 	k.EntrypointName = fnName
@@ -81,12 +75,11 @@ func LinearExtrudeSDF(k ShapeKernel, height float32, center bool) ShapeKernel {
 	}
 	z0, z1 := linearExtrudeZBounds(height, center)
 	fnName := genFunctionID(&k.IDs, "linear_extrude_sdf")
-	k.Code += "\n" + fmt.Sprintf(
-		Dedent(`
-			fn %s(p: vec3<f32>) -> f32 {
-				let sdf2d = %s(p.xy);
-				let zDist = min(abs(p.z - %f), abs(p.z - %f));
-				let insideZ = p.z >= %f && p.z <= %f;
+	AppendWGSL(&k, `
+			fn {{.Entrypoint}}(p: vec3<f32>) -> f32 {
+				let sdf2d = {{.Inner}}(p.xy);
+				let zDist = min(abs(p.z - {{.ZMin}}), abs(p.z - {{.ZMax}}));
+				let insideZ = p.z >= {{.ZMin}} && p.z <= {{.ZMax}};
 				if (!insideZ) {
 					if (sdf2d > 0.0) {
 						return -zDist;
@@ -100,14 +93,7 @@ func LinearExtrudeSDF(k ShapeKernel, height float32, center bool) ShapeKernel {
 					return sdf2d;
 				}
 			}
-		`),
-		fnName,
-		k.EntrypointName,
-		z0,
-		z1,
-		z0,
-		z1,
-	)
+		`, "Entrypoint", fnName, "Inner", k.EntrypointName, "ZMin", z0, "ZMax", z1)
 	k.Kind = SDF3D
 	k.EntrypointName = fnName
 	return k
@@ -121,19 +107,14 @@ func RevolveSDF(k ShapeKernel) ShapeKernel {
 		panic("expected 2D SDF kernel")
 	}
 	fnName := genFunctionID(&k.IDs, "revolve_sdf")
-	k.Code += "\n" + fmt.Sprintf(
-		Dedent(`
-			fn %s(p: vec3<f32>) -> f32 {
+	AppendWGSL(&k, `
+			fn {{.Entrypoint}}(p: vec3<f32>) -> f32 {
 				let r = length(p.xy);
-				let dPos = %s(vec2<f32>(r, p.z));
-				let dNeg = %s(vec2<f32>(-r, p.z));
+				let dPos = {{.Inner}}(vec2<f32>(r, p.z));
+				let dNeg = {{.Inner}}(vec2<f32>(-r, p.z));
 				return max(dPos, dNeg);
 			}
-		`),
-		fnName,
-		k.EntrypointName,
-		k.EntrypointName,
-	)
+		`, "Entrypoint", fnName, "Inner", k.EntrypointName)
 	k.Kind = SDF3D
 	k.EntrypointName = fnName
 	return k
@@ -156,9 +137,8 @@ func RevolveSolidRange(k ShapeKernel, angleRad float32, startRad float32) ShapeK
 	}
 
 	normalizeName := genFunctionID(&k.IDs, "normalize_angle")
-	k.Code += "\n" + fmt.Sprintf(
-		Dedent(`
-			fn %s(a: f32) -> f32 {
+	AppendWGSL(&k, `
+			fn {{.Entrypoint}}(a: f32) -> f32 {
 				let twoPi = 6.283185307179586;
 				var result = a - floor(a / twoPi) * twoPi;
 				if (result < 0.0) {
@@ -166,45 +146,39 @@ func RevolveSolidRange(k ShapeKernel, angleRad float32, startRad float32) ShapeK
 				}
 				return result;
 			}
-		`),
-		normalizeName,
-	)
+		`, "Entrypoint", normalizeName)
 
 	fnName := genFunctionID(&k.IDs, "revolve_solid_range")
-	k.Code += "\n" + fmt.Sprintf(
-		Dedent(`
-			fn %s(p: vec3<f32>) -> bool {
+	AppendWGSL(&k, `
+			fn {{.Entrypoint}}(p: vec3<f32>) -> bool {
 				let r = length(p.xy);
-				let angle = %f;
-				let start = %s(%f);
+				let angle = {{.Angle}};
+				let start = {{.Normalize}}({{.Start}});
 				let full = abs(angle) >= 6.283185307179586 - 1e-9;
 
 				if (!full) {
 					let theta = atan2(p.y, p.x);
 					if (angle >= 0.0) {
-						let delta = %s(theta - start);
+						let delta = {{.Normalize}}(theta - start);
 						if (delta > angle + 1e-9) {
 							return false;
 						}
 					} else {
-						let delta = %s(start - theta);
+						let delta = {{.Normalize}}(start - theta);
 						if (delta > -angle + 1e-9) {
 							return false;
 						}
 					}
 				}
 
-				return %s(vec2<f32>(r, p.z)) || %s(vec2<f32>(-r, p.z));
+				return {{.Inner}}(vec2<f32>(r, p.z)) || {{.Inner}}(vec2<f32>(-r, p.z));
 			}
-		`),
-		fnName,
-		angleRad,
-		normalizeName,
-		startRad,
-		normalizeName,
-		normalizeName,
-		k.EntrypointName,
-		k.EntrypointName,
+		`,
+		"Entrypoint", fnName,
+		"Angle", angleRad,
+		"Normalize", normalizeName,
+		"Start", startRad,
+		"Inner", k.EntrypointName,
 	)
 	k.Kind = Solid3D
 	k.EntrypointName = fnName
@@ -244,22 +218,21 @@ func InsetExtrude(
 	k.Code += "\n" + insetExtrudeSideCode(topInsetName, z0, z1, top, false, topFn)
 
 	fnName := genFunctionID(&k.IDs, "inset_extrude")
-	k.Code += "\n" + fmt.Sprintf(
-		Dedent(`
-			fn %s(p: vec3<f32>) -> bool {
-				if (p.z < %f || p.z > %f) {
+	AppendWGSL(&k, `
+			fn {{.Entrypoint}}(p: vec3<f32>) -> bool {
+				if (p.z < {{.ZMin}} || p.z > {{.ZMax}}) {
 					return false;
 				}
-				let inset = %s(p.z) + %s(p.z);
-				return %s(p.xy) > inset;
+				let inset = {{.BottomInset}}(p.z) + {{.TopInset}}(p.z);
+				return {{.Inner}}(p.xy) > inset;
 			}
-		`),
-		fnName,
-		z0,
-		z1,
-		bottomInsetName,
-		topInsetName,
-		k.EntrypointName,
+		`,
+		"Entrypoint", fnName,
+		"ZMin", z0,
+		"ZMax", z1,
+		"BottomInset", bottomInsetName,
+		"TopInset", topInsetName,
+		"Inner", k.EntrypointName,
 	)
 	k.Kind = Solid3D
 	k.EntrypointName = fnName
@@ -269,49 +242,41 @@ func InsetExtrude(
 func insetExtrudeSideCode(fnName string, z0, z1, radius float32, bottom bool, kind InsetFunction) string {
 	r := float32(math.Abs(float64(radius)))
 	outwards := radius < 0
-	distExpr := fmt.Sprintf("z - %f", z0)
+	distExpr := Template("z - {{.ZMin}}", "ZMin", z0)
 	if !bottom {
-		distExpr = fmt.Sprintf("%f - z", z1)
+		distExpr = Template("{{.ZMax}} - z", "ZMax", z1)
 	}
 
 	var body string
 	switch kind {
 	case InsetExtrudeChamfer:
 		if outwards {
-			body = fmt.Sprintf("return %f * (frac - 1.0);", r)
+			body = Template("return {{.Radius}} * (frac - 1.0);", "Radius", r)
 		} else {
-			body = fmt.Sprintf("return %f * (1.0 - frac);", r)
+			body = Template("return {{.Radius}} * (1.0 - frac);", "Radius", r)
 		}
 	case InsetExtrudeFillet:
 		if outwards {
-			body = fmt.Sprintf("return %f * (sqrt(max(0.0, 1.0 - x*x)) - 1.0);", r)
+			body = Template("return {{.Radius}} * (sqrt(max(0.0, 1.0 - x*x)) - 1.0);", "Radius", r)
 		} else {
-			body = fmt.Sprintf("return %f * (1.0 - sqrt(max(0.0, 1.0 - x*x)));", r)
+			body = Template("return {{.Radius}} * (1.0 - sqrt(max(0.0, 1.0 - x*x)));", "Radius", r)
 		}
 	default:
 		panic(`inset extrude function must be "chamfer" or "fillet"`)
 	}
 
-	return fmt.Sprintf(
-		Dedent(`
-			fn %s(z: f32) -> f32 {
-				if (%f <= 0.0) {
+	return WGSL(`
+			fn {{.Entrypoint}}(z: f32) -> f32 {
+				if ({{.Radius}} <= 0.0) {
 					return 0.0;
 				}
-				let dist = %s;
-				if (dist >= %f) {
+				let dist = {{.DistExpr}};
+				if (dist >= {{.Radius}}) {
 					return 0.0;
 				}
-				let frac = clamp(dist / %f, 0.0, 1.0);
+				let frac = clamp(dist / {{.Radius}}, 0.0, 1.0);
 				let x = frac - 1.0;
-				%s
+				{{.Body}}
 			}
-		`),
-		fnName,
-		r,
-		distExpr,
-		r,
-		r,
-		body,
-	)
+		`, "Entrypoint", fnName, "Radius", r, "DistExpr", distExpr, "Body", body)
 }

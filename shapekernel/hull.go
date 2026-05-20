@@ -1,10 +1,6 @@
 package shapekernel
 
-import (
-	"fmt"
-
-	"github.com/unixpickle/model3d/model2d"
-)
+import "github.com/unixpickle/model3d/model2d"
 
 // ArcHullSolid creates a solid kernel for a convex hull of circular arcs.
 func ArcHullSolid(h *model2d.ArcHull) ShapeKernel {
@@ -35,12 +31,12 @@ func ArcHullSolid(h *model2d.ArcHull) ShapeKernel {
 				return segData
 			}),
 		},
-		Code: Dedent(fmt.Sprintf(`
-			fn %s(a: vec2<f32>, b: vec2<f32>) -> f32 {
+		Code: WGSL(`
+			fn {{.Cross}}(a: vec2<f32>, b: vec2<f32>) -> f32 {
 				return a.x * b.y - a.y * b.x;
 			}
 
-			fn %s(start: f32, end: f32, theta: f32) -> bool {
+			fn {{.ArcContains}}(start: f32, end: f32, theta: f32) -> bool {
 				if (start == end) {
 					return false;
 				}
@@ -50,23 +46,23 @@ func ArcHullSolid(h *model2d.ArcHull) ShapeKernel {
 				return theta <= start || theta > end;
 			}
 
-			fn %s(origin: vec2<f32>, dir: vec2<f32>, p1: vec2<f32>, p2: vec2<f32>) -> f32 {
+			fn {{.SegmentRayScale}}(origin: vec2<f32>, dir: vec2<f32>, p1: vec2<f32>, p2: vec2<f32>) -> f32 {
 				let v = p2 - p1;
-				let denom = %s(dir, v);
+				let denom = {{.Cross}}(dir, v);
 				let eps = 1e-6 * length(dir) * length(v);
 				if (abs(denom) <= eps) {
 					return 1e30;
 				}
 				let delta = p1 - origin;
-				let rayT = %s(delta, v) / denom;
-				let segT = %s(delta, dir) / denom;
+				let rayT = {{.Cross}}(delta, v) / denom;
+				let segT = {{.Cross}}(delta, dir) / denom;
 				if (rayT > 1e-6 && segT >= 0.0 && segT <= 1.0) {
 					return rayT;
 				}
 				return 1e30;
 			}
 
-			fn %s(origin: vec2<f32>, dir: vec2<f32>, center: vec2<f32>, radius: f32, start: f32, end: f32) -> f32 {
+			fn {{.ArcRayScale}}(origin: vec2<f32>, dir: vec2<f32>, center: vec2<f32>, radius: f32, start: f32, end: f32) -> f32 {
 				if (radius <= 0.0 || start == end) {
 					return 1e30;
 				}
@@ -93,14 +89,14 @@ func ArcHullSolid(h *model2d.ArcHull) ShapeKernel {
 				if (t1 > 1e-6) {
 					let point = origin + dir * t1;
 					let theta = atan2(point.y - center.y, point.x - center.x);
-					if (%s(start, end, theta)) {
+					if ({{.ArcContains}}(start, end, theta)) {
 						best = t1;
 					}
 				}
 				if (t2 > 1e-6) {
 					let point = origin + dir * t2;
 					let theta = atan2(point.y - center.y, point.x - center.x);
-					if (%s(start, end, theta)) {
+					if ({{.ArcContains}}(start, end, theta)) {
 						best = min(best, t2);
 					}
 				}
@@ -108,14 +104,14 @@ func ArcHullSolid(h *model2d.ArcHull) ShapeKernel {
 				return best;
 			}
 
-			fn %s(p: vec2<f32>) -> bool {
-				let numArcs = %du;
-				let numSegs = %du;
+			fn {{.Entrypoint}}(p: vec2<f32>) -> bool {
+				let numArcs = {{.NumArcs}}u;
+				let numSegs = {{.NumSegs}}u;
 				if (numArcs == 0u && numSegs == 0u) {
 					return false;
 				}
 
-				let startCenter = %s;
+				let startCenter = {{.StartCenter}};
 				let dir = p - startCenter;
 				if (dot(dir, dir) <= 1e-12) {
 					return true;
@@ -123,16 +119,16 @@ func ArcHullSolid(h *model2d.ArcHull) ShapeKernel {
 
 					var bestScale = 1e30;
 					for (var i = 0u; i < numArcs; i++) {
-							let center = vec2<f32>(%s[i*5], %s[i*5+1]);
-							let radius = %s[i*5+2];
-							let start = %s[i*5+3];
-							let end = %s[i*5+4];
-						bestScale = min(bestScale, %s(startCenter, dir, center, radius, start, end));
+							let center = vec2<f32>({{.ArcBuffer}}[i*5], {{.ArcBuffer}}[i*5+1]);
+							let radius = {{.ArcBuffer}}[i*5+2];
+							let start = {{.ArcBuffer}}[i*5+3];
+							let end = {{.ArcBuffer}}[i*5+4];
+						bestScale = min(bestScale, {{.ArcRayScale}}(startCenter, dir, center, radius, start, end));
 					}
 					for (var i = 0u; i < numSegs; i++) {
-							let p1 = vec2<f32>(%s[i*4], %s[i*4+1]);
-							let p2 = vec2<f32>(%s[i*4+2], %s[i*4+3]);
-						bestScale = min(bestScale, %s(startCenter, dir, p1, p2));
+							let p1 = vec2<f32>({{.SegBuffer}}[i*4], {{.SegBuffer}}[i*4+1]);
+							let p2 = vec2<f32>({{.SegBuffer}}[i*4+2], {{.SegBuffer}}[i*4+3]);
+						bestScale = min(bestScale, {{.SegmentRayScale}}(startCenter, dir, p1, p2));
 					}
 
 				if (bestScale >= 1e29) {
@@ -140,9 +136,18 @@ func ArcHullSolid(h *model2d.ArcHull) ShapeKernel {
 					}
 					return bestScale >= 1.0;
 				}
-				`, crossName, arcContainsName, segmentRayScaleName, crossName, crossName, crossName, arcRayScaleName, arcContainsName, arcContainsName, entrypointName, len(arcData)/5, len(segData)/4, startCenter.WebGPUVec(),
-			arcBufName, arcBufName, arcBufName, arcBufName, arcBufName, arcRayScaleName,
-			segBufName, segBufName, segBufName, segBufName, segmentRayScaleName)),
+				`,
+			"Cross", crossName,
+			"ArcContains", arcContainsName,
+			"SegmentRayScale", segmentRayScaleName,
+			"ArcRayScale", arcRayScaleName,
+			"Entrypoint", entrypointName,
+			"NumArcs", len(arcData)/5,
+			"NumSegs", len(segData)/4,
+			"StartCenter", startCenter.WebGPUVec(),
+			"ArcBuffer", arcBufName,
+			"SegBuffer", segBufName,
+		),
 		EntrypointName: entrypointName,
 	}
 }
@@ -167,8 +172,8 @@ func ArcHullSDF(h *model2d.ArcHull) ShapeKernel {
 		Kind:    SDF2D,
 		IDs:     solidKernel.IDs,
 		Buffers: append([]Buffer{}, solidKernel.Buffers...),
-		Code: solidKernel.Code + "\n" + Dedent(fmt.Sprintf(`
-			fn %s(start: f32, end: f32, theta: f32) -> bool {
+		Code: solidKernel.Code + "\n" + WGSL(`
+			fn {{.ArcContains}}(start: f32, end: f32, theta: f32) -> bool {
 				if (start == end) {
 					return false;
 				}
@@ -178,7 +183,7 @@ func ArcHullSDF(h *model2d.ArcHull) ShapeKernel {
 				return theta <= start || theta > end;
 			}
 
-			fn %s(p: vec2<f32>, p1: vec2<f32>, p2: vec2<f32>) -> f32 {
+			fn {{.SegmentDistance}}(p: vec2<f32>, p1: vec2<f32>, p2: vec2<f32>) -> f32 {
 				let v = p2 - p1;
 				let vNormSq = dot(v, v);
 				if (vNormSq <= 0.0) {
@@ -189,7 +194,7 @@ func ArcHullSDF(h *model2d.ArcHull) ShapeKernel {
 				return distance(p, closest);
 			}
 
-			fn %s(p: vec2<f32>, center: vec2<f32>, radius: f32, start: f32, end: f32) -> f32 {
+			fn {{.ArcDistance}}(p: vec2<f32>, center: vec2<f32>, radius: f32, start: f32, end: f32) -> f32 {
 				if (radius <= 0.0) {
 					return distance(p, center);
 				}
@@ -203,42 +208,50 @@ func ArcHullSDF(h *model2d.ArcHull) ShapeKernel {
 				var minDist = min(distance(p, startPoint), distance(p, endPoint));
 
 				let theta = atan2(p.y - center.y, p.x - center.x);
-				if (%s(start, end, theta)) {
+				if ({{.ArcContains}}(start, end, theta)) {
 					minDist = min(minDist, abs(distance(p, center) - radius));
 				}
 
 				return minDist;
 			}
 
-			fn %s(p: vec2<f32>) -> f32 {
-				let numArcs = %du;
-				let numSegs = %du;
+			fn {{.Entrypoint}}(p: vec2<f32>) -> f32 {
+				let numArcs = {{.NumArcs}}u;
+				let numSegs = {{.NumSegs}}u;
 				if (numArcs == 0u && numSegs == 0u) {
 					return 0.0;
 				}
 
 					var minDist = 1e30;
 					for (var i = 0u; i < numArcs; i++) {
-							let center = vec2<f32>(%s[i*5], %s[i*5+1]);
-							let radius = %s[i*5+2];
-							let start = %s[i*5+3];
-							let end = %s[i*5+4];
-						minDist = min(minDist, %s(p, center, radius, start, end));
+							let center = vec2<f32>({{.ArcBuffer}}[i*5], {{.ArcBuffer}}[i*5+1]);
+							let radius = {{.ArcBuffer}}[i*5+2];
+							let start = {{.ArcBuffer}}[i*5+3];
+							let end = {{.ArcBuffer}}[i*5+4];
+						minDist = min(minDist, {{.ArcDistance}}(p, center, radius, start, end));
 					}
 					for (var i = 0u; i < numSegs; i++) {
-							let p1 = vec2<f32>(%s[i*4], %s[i*4+1]);
-							let p2 = vec2<f32>(%s[i*4+2], %s[i*4+3]);
-						minDist = min(minDist, %s(p, p1, p2));
+							let p1 = vec2<f32>({{.SegBuffer}}[i*4], {{.SegBuffer}}[i*4+1]);
+							let p2 = vec2<f32>({{.SegBuffer}}[i*4+2], {{.SegBuffer}}[i*4+3]);
+						minDist = min(minDist, {{.SegmentDistance}}(p, p1, p2));
 					}
 
-				if (%s(p)) {
+				if ({{.Solid}}(p)) {
 					return minDist;
 					}
 					return -minDist;
 				}
-				`, arcContainsName, segmentDistanceName, arcDistanceName, arcContainsName, entrypointName, arcCount, segCount,
-			arcBufName, arcBufName, arcBufName, arcBufName, arcBufName, arcDistanceName,
-			segBufName, segBufName, segBufName, segBufName, segmentDistanceName, solidKernel.EntrypointName)),
+				`,
+			"ArcContains", arcContainsName,
+			"SegmentDistance", segmentDistanceName,
+			"ArcDistance", arcDistanceName,
+			"Entrypoint", entrypointName,
+			"NumArcs", arcCount,
+			"NumSegs", segCount,
+			"ArcBuffer", arcBufName,
+			"SegBuffer", segBufName,
+			"Solid", solidKernel.EntrypointName,
+		),
 		EntrypointName: entrypointName,
 	}
 }
