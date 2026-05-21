@@ -1,6 +1,13 @@
 import { CPUMesh, type CPUTriangle, type IndexedMesh } from './mesh';
 import { qefWGSL } from './qef_wgsl';
 import {
+  createSolidBindGroup,
+  createSolidBindGroupLayout,
+  prepareSolidBindings,
+  transformSolidWGSL,
+  type PreparedSolidBindings,
+} from './solid_bindings';
+import {
   add,
   addScalar,
   clamp,
@@ -141,16 +148,6 @@ interface SingularVertexGroup {
   components: number[][];
 }
 
-interface NormalizedSolidBinding {
-  binding: number;
-  kind: DualContourSolidBindingKind;
-  name: string;
-  wgslType: string;
-  wgslDefs: string;
-  buffer: any;
-  size: number;
-}
-
 export interface DualContourStageTiming {
   stage: string;
   ms: number;
@@ -179,7 +176,7 @@ export async function dualContourWebGPU(options: DualContouringWebGPUOptions): P
   markStage('normalize options + grid');
 
   const device = config.device;
-  const solidBindings = prepareSolidBindings(device, config.solidBindings ?? [], config.label);
+  const solidBindings = prepareSolidBindings(device, config.solidBindings ?? [], config.label, 'dualContourWebGPU()');
   const workgroupSize = config.workgroupSize;
   const deviceLimits = device.limits as Record<string, number | undefined> | undefined;
   const maxStorageBindingSize = deviceLimits?.maxStorageBufferBindingSize ?? 128 * 1024 * 1024;
@@ -331,7 +328,7 @@ export async function dualContourWebGPU(options: DualContouringWebGPUOptions): P
     { binding: 5, type: 'read-only-storage' },
     { binding: 6, type: 'storage' },
   ]);
-  const solidBindGroupLayout = solidBindings.length === 0 ? null : createSolidBindGroupLayout(device, solidBindings);
+  const solidBindGroupLayout = solidBindings.bindings.length === 0 ? null : createSolidBindGroupLayout(device, solidBindings);
 
   const shaders = buildShaderBundle(config.solidWGSL, solidBindings, workgroupSize);
   const [
@@ -890,18 +887,6 @@ function createInternalBindGroupLayout(
       binding: entry.binding,
       visibility: GPUShaderStageAny.COMPUTE,
       buffer: { type: entry.type },
-    })),
-  });
-}
-
-function createSolidBindGroupLayout(device: any, solidBindings: NormalizedSolidBinding[]): any {
-  return device.createBindGroupLayout({
-    entries: solidBindings.map((binding) => ({
-      binding: binding.binding,
-      visibility: GPUShaderStageAny.COMPUTE,
-      buffer: {
-        type: binding.kind === 'uniform' ? 'uniform' : 'read-only-storage',
-      },
     })),
   });
 }
@@ -1541,7 +1526,7 @@ interface ShaderBundle {
   emitZ: string;
 }
 
-function buildShaderBundle(solidWGSL: string, solidBindings: NormalizedSolidBinding[], workgroupSize: number): ShaderBundle {
+function buildShaderBundle(solidWGSL: string, solidBindings: PreparedSolidBindings, workgroupSize: number): ShaderBundle {
   return {
     corner: buildCornerShader(solidWGSL, solidBindings, workgroupSize),
     edgeX: buildEdgeShader(solidWGSL, solidBindings, workgroupSize, 'x'),
@@ -1635,7 +1620,7 @@ fn bisectOccupancyEdge(p0: vec3<f32>, p1: vec3<f32>, occ0: bool) -> vec3<f32> {
 `;
 }
 
-function wgslHeader(solidWGSL: string, solidBindings: NormalizedSolidBinding[]): string {
+function wgslHeader(solidWGSL: string, solidBindings: PreparedSolidBindings): string {
   const surfaceHelpers = surfaceHelpersWGSL(solidWGSL);
   const solidBindingWGSL = buildSolidBindingWGSL(solidBindings);
   return /* wgsl */`
@@ -1696,7 +1681,7 @@ struct TriangleIndex {
 
 ${solidBindingWGSL}
 
-${solidWGSL}
+${transformSolidWGSL(solidWGSL, solidBindings)}
 
 fn cornerSlot(localZ: u32) -> u32 {
   return (batch.cornerRingHead + localZ) % params.cornerRows;
@@ -1781,7 +1766,7 @@ fn chooseFirstDiagonal(v0: vec3<f32>, v1: vec3<f32>, v2: vec3<f32>, v3: vec3<f32
 `;
 }
 
-function buildCornerShader(solidWGSL: string, solidBindings: NormalizedSolidBinding[], workgroupSize: number): string {
+function buildCornerShader(solidWGSL: string, solidBindings: PreparedSolidBindings, workgroupSize: number): string {
   return /* wgsl */`
 ${wgslHeader(solidWGSL, solidBindings)}
 @group(0) @binding(2) var<storage, read_write> corners: array<u32>;
@@ -1802,7 +1787,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 `;
 }
 
-function buildEdgeShader(solidWGSL: string, solidBindings: NormalizedSolidBinding[], workgroupSize: number, axis: 'x' | 'y' | 'z'): string {
+function buildEdgeShader(solidWGSL: string, solidBindings: PreparedSolidBindings, workgroupSize: number, axis: 'x' | 'y' | 'z'): string {
   const decode = axis === 'x'
     ? `
   let total = params.nx * (params.ny + 1u) * batch.localZCount;
@@ -1870,7 +1855,7 @@ ${decode}
 `;
 }
 
-function buildCubeShader(solidWGSL: string, solidBindings: NormalizedSolidBinding[], workgroupSize: number): string {
+function buildCubeShader(solidWGSL: string, solidBindings: PreparedSolidBindings, workgroupSize: number): string {
   return /* wgsl */`
 ${wgslHeader(solidWGSL, solidBindings)}
 @group(0) @binding(2) var<storage, read> corners: array<u32>;
@@ -2001,7 +1986,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 `;
 }
 
-function buildEmitShader(solidWGSL: string, solidBindings: NormalizedSolidBinding[], workgroupSize: number, axis: 'x' | 'y' | 'z'): string {
+function buildEmitShader(solidWGSL: string, solidBindings: PreparedSolidBindings, workgroupSize: number, axis: 'x' | 'y' | 'z'): string {
   const decode = axis === 'x'
     ? `
   let total = params.nx * (params.ny + 1u) * batch.localZCount;
@@ -2127,7 +2112,7 @@ ${decode}
 `;
 }
 
-function buildCountShader(solidWGSL: string, solidBindings: NormalizedSolidBinding[], workgroupSize: number, axis: 'x' | 'y' | 'z'): string {
+function buildCountShader(solidWGSL: string, solidBindings: PreparedSolidBindings, workgroupSize: number, axis: 'x' | 'y' | 'z'): string {
   const decode = axis === 'x'
     ? `
   let total = params.nx * (params.ny + 1u) * batch.localZCount;
@@ -2240,110 +2225,6 @@ fn solidOccupancy(p: vec3<f32>) -> bool {
 }
 `;
 
-function prepareSolidBindings(device: any, solidBindings: DualContourSolidBinding[], label: string): NormalizedSolidBinding[] {
-  const seenNames = new Set<string>();
-  return solidBindings.map((binding, bindingIndex) => {
-    validateSolidBinding(binding, bindingIndex, seenNames);
-    const resource = createSolidBindingResource(device, binding, label, bindingIndex);
-    return {
-      binding: bindingIndex,
-      kind: binding.kind,
-      name: binding.name,
-      wgslType: binding.wgslType.trim(),
-      wgslDefs: binding.wgslDefs?.trim() ?? '',
-      buffer: resource.buffer,
-      size: resource.size,
-    };
-  });
-}
-
-function validateSolidBinding(binding: DualContourSolidBinding, bindingIndex: number, seenNames: Set<string>): void {
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(binding.name)) {
-    throw new Error(`dualContourWebGPU(): solidBindings[${bindingIndex}] has invalid WGSL identifier "${binding.name}".`);
-  }
-  if (seenNames.has(binding.name)) {
-    throw new Error(`dualContourWebGPU(): duplicate solid binding name "${binding.name}".`);
-  }
-  seenNames.add(binding.name);
-  if (binding.kind !== 'uniform' && binding.kind !== 'storage') {
-    throw new Error(`dualContourWebGPU(): solidBindings[${bindingIndex}] has invalid kind "${String(binding.kind)}".`);
-  }
-  if (!binding.wgslType.trim()) {
-    throw new Error(`dualContourWebGPU(): solidBindings[${bindingIndex}] must provide a non-empty wgslType.`);
-  }
-}
-
-function createSolidBindingResource(device: any, binding: DualContourSolidBinding, label: string, bindingIndex: number): { buffer: any; size: number } {
-  const source = binding.source;
-  if (isBufferSource(source)) {
-    const byteLength = getBufferSourceSize(source);
-    if (byteLength <= 0) {
-      throw new Error(`dualContourWebGPU(): solidBindings[${bindingIndex}] data source must contain at least one byte.`);
-    }
-    const usage = (binding.kind === 'uniform' ? GPUBufferUsageAny.UNIFORM : GPUBufferUsageAny.STORAGE) | GPUBufferUsageAny.COPY_DST;
-    const buffer = device.createBuffer({
-      label: binding.label ?? `${label}-solid-binding-${bindingIndex}-${binding.name}`,
-      size: byteLength,
-      usage,
-    });
-    writeSolidBindingBuffer(device, buffer, source);
-    return { buffer, size: byteLength };
-  }
-  if (!source || typeof source !== 'object' || typeof source.size !== 'number') {
-    throw new Error(`dualContourWebGPU(): solidBindings[${bindingIndex}] source must be a typed array, ArrayBuffer, or GPUBuffer.`);
-  }
-  const requiredUsage = binding.kind === 'uniform' ? GPUBufferUsageAny.UNIFORM : GPUBufferUsageAny.STORAGE;
-  const usage = typeof source.usage === 'number' ? source.usage : 0;
-  if ((usage & requiredUsage) === 0) {
-    throw new Error(
-      `dualContourWebGPU(): solidBindings[${bindingIndex}] GPUBuffer is missing ${binding.kind.toUpperCase()} usage.`,
-    );
-  }
-  const size = binding.size ?? source.size;
-  if (!(size > 0) || size > source.size) {
-    throw new Error(`dualContourWebGPU(): solidBindings[${bindingIndex}] size must be in (0, buffer.size].`);
-  }
-  return { buffer: source, size };
-}
-
-function isBufferSource(value: unknown): value is BufferSource {
-  return value instanceof ArrayBuffer || ArrayBuffer.isView(value);
-}
-
-function getBufferSourceSize(source: BufferSource): number {
-  return source.byteLength;
-}
-
-function writeSolidBindingBuffer(device: any, buffer: any, source: BufferSource): void {
-  if (source instanceof ArrayBuffer) {
-    device.queue.writeBuffer(buffer, 0, source);
-  } else {
-    device.queue.writeBuffer(buffer, 0, source.buffer, source.byteOffset, source.byteLength);
-  }
-}
-
-function createSolidBindGroup(device: any, layout: any, solidBindings: NormalizedSolidBinding[]): any {
-  return device.createBindGroup({
-    layout,
-    entries: solidBindings.map((binding) => ({
-      binding: binding.binding,
-      resource: {
-        buffer: binding.buffer,
-        size: binding.size,
-      },
-    })),
-  });
-}
-
-function buildSolidBindingWGSL(solidBindings: NormalizedSolidBinding[]): string {
-  if (solidBindings.length === 0) {
-    return '';
-  }
-  const defs = [...new Set(solidBindings.map((binding) => binding.wgslDefs).filter((wgslDefs) => wgslDefs.length > 0))];
-  const declarations = solidBindings.map((binding) => (
-    binding.kind === 'uniform'
-      ? `@group(1) @binding(${binding.binding}) var<uniform> ${binding.name}: ${binding.wgslType};`
-      : `@group(1) @binding(${binding.binding}) var<storage, read> ${binding.name}: ${binding.wgslType};`
-  ));
-  return `${defs.join('\n\n')}${defs.length > 0 ? '\n\n' : ''}${declarations.join('\n')}`;
+function buildSolidBindingWGSL(solidBindings: PreparedSolidBindings): string {
+  return solidBindings.declarationWGSL;
 }
