@@ -449,8 +449,8 @@ func TestConePrimitive(t *testing.T) {
 func TestConeSlicePrimitive(t *testing.T) {
 	p1 := Vec3{-0.6, 0.4, -0.3}
 	p2 := Vec3{0.8, -0.2, 0.9}
-	r1 := float32(0.22)
-	r2 := float32(0.52)
+	r1 := float32(1)
+	r2 := float32(2)
 	shape := &model3d.ConeSlice{
 		P1: model3d.XYZ(float64(p1[0]), float64(p1[1]), float64(p1[2])),
 		P2: model3d.XYZ(float64(p2[0]), float64(p2[1]), float64(p2[2])),
