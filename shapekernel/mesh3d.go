@@ -14,6 +14,7 @@ func Mesh3DSolid(m *model3d.Mesh) ShapeKernel {
 	nodeMaxName := genFunctionID(&ids, "mesh3d_node_max")
 	rayBoundsName := genFunctionID(&ids, "mesh3d_ray_bounds")
 	triangleHitName := genFunctionID(&ids, "mesh3d_triangle_hit")
+	rayCastName := genFunctionID(&ids, "mesh3d_ray_cast")
 	triBufName := genBufferID(&ids, "triangles")
 	nodeBoundsBufName := genBufferID(&ids, "node_bounds")
 	nodeDataBufName := genBufferID(&ids, "node_data")
@@ -73,38 +74,37 @@ func Mesh3DSolid(m *model3d.Mesh) ShapeKernel {
 				return maxFrac >= minFrac && maxFrac >= 0.0;
 			}
 
-			fn {{.TriangleHit}}(origin: vec3<f32>, dir: vec3<f32>, p1: vec3<f32>, p2: vec3<f32>, p3: vec3<f32>) -> bool {
+			fn {{.TriangleHit}}(origin: vec3<f32>, dir: vec3<f32>, p1: vec3<f32>, p2: vec3<f32>, p3: vec3<f32>) -> vec2<f32> {
 				let v1 = p2 - p1;
 				let v2 = p3 - p1;
 				let cross1 = cross(dir, v2);
 				let det = dot(cross1, v1);
 				let eps = 1e-6 * length(v1) * length(cross1);
 				if (abs(det) <= eps) {
-					return false;
+					return vec2<f32>(0.0, 0.0);
 				}
 				let invDet = 1.0 / det;
 				let o = origin - p1;
 				let bary1 = invDet * dot(o, cross1);
-				if (bary1 < 0.0 || bary1 > 1.0) {
-					return false;
-				}
 				let cross2 = cross(o, v1);
 				let bary2 = invDet * dot(dir, cross2);
-				if (bary2 < 0.0 || bary1 + bary2 > 1.0) {
-					return false;
-				}
 				let scale = invDet * dot(v2, cross2);
-				return scale >= 0.0;
+				let hit = bary1 >= 0.0 && bary2 >= 0.0 && bary1 + bary2 <= 1.0 && scale >= 0.0;
+				let edgeFraction = min(
+					min(abs(bary1), abs(bary2)),
+					min(abs(1.0 - bary1 - bary2), abs(scale)),
+				);
+				return vec2<f32>(select(0.0, 1.0, hit), edgeFraction);
 			}
 
-			fn {{.Entrypoint}}(p: vec3<f32>) -> bool {
+			fn {{.RayCast}}(p: vec3<f32>, dir: vec3<f32>) -> vec2<f32> {
 				let numNodes = {{.NumNodes}}u;
 				if (numNodes == 0u) {
-					return false;
+					return vec2<f32>(0.0, 1e30);
 				}
 
-				let dir = vec3<f32>(0.5224892708603626, 0.10494477243214506, 0.43558938446126527);
 				var numIntersections = 0u;
+				var minEdgeFraction = 1e30;
 				var nodeIdx = 0u;
 				loop {
 					if (nodeIdx >= numNodes) {
@@ -129,15 +129,26 @@ func Mesh3DSolid(m *model3d.Mesh) ShapeKernel {
 							let p1 = vec3<f32>({{.Triangles}}[triOffset], {{.Triangles}}[triOffset+1u], {{.Triangles}}[triOffset+2u]);
 							let p2 = vec3<f32>({{.Triangles}}[triOffset+3u], {{.Triangles}}[triOffset+4u], {{.Triangles}}[triOffset+5u]);
 							let p3 = vec3<f32>({{.Triangles}}[triOffset+6u], {{.Triangles}}[triOffset+7u], {{.Triangles}}[triOffset+8u]);
-							if ({{.TriangleHit}}(p, dir, p1, p2, p3)) {
+							let hitResult = {{.TriangleHit}}(p, dir, p1, p2, p3);
+							if (hitResult.x >= 0.5) {
 								numIntersections += 1u;
 							}
+							minEdgeFraction = min(minEdgeFraction, hitResult.y);
 						}
 					}
 
 					nodeIdx += 1u;
 				}
-				return (numIntersections & 1u) == 1u;
+				return vec2<f32>(f32(numIntersections & 1u), minEdgeFraction);
+			}
+
+			fn {{.Entrypoint}}(p: vec3<f32>) -> bool {
+				let first = {{.RayCast}}(p, vec3<f32>(0.5224892708603626, 0.10494477243214506, 0.43558938446126527));
+				let second = {{.RayCast}}(p, vec3<f32>(0.10494477243214506, 0.43558938446126527, 0.5224892708603626));
+				if (second.y > first.y) {
+					return second.x >= 0.5;
+				}
+				return first.x >= 0.5;
 			}
 		`,
 			"NodeMin", nodeMinName,
@@ -145,6 +156,7 @@ func Mesh3DSolid(m *model3d.Mesh) ShapeKernel {
 			"NodeMax", nodeMaxName,
 			"RayBounds", rayBoundsName,
 			"TriangleHit", triangleHitName,
+			"RayCast", rayCastName,
 			"Entrypoint", entrypointName,
 			"NumNodes", numNodes,
 			"NodeData", nodeDataBufName,

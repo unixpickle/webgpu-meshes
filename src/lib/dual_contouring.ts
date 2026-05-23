@@ -1663,7 +1663,7 @@ struct HermiteEdge {
 
 struct CubeVertex {
   isActive: u32,
-  _pad0: u32,
+  globalIndex: u32,
   _pad1: u32,
   _pad2: u32,
   pos: vec4<f32>,
@@ -1915,6 +1915,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     (c001 != firstValue) || (c101 != firstValue) || (c011 != firstValue) || (c111 != firstValue);
   if (!activeCube) {
     cubes[cubeIndex].isActive = 0u;
+    cubes[cubeIndex].globalIndex = 0xffffffffu;
     cubes[cubeIndex].pos = vec4<f32>(0.0);
     return;
   }
@@ -1948,8 +1949,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   if (e11.isActive != 0u) { massPoint += e11.pos.xyz; count += 1.0; }
 
   if (count <= 0.0) {
-    cubes[i].isActive = 0u;
-    cubes[i].pos = vec4<f32>(0.0);
+    cubes[cubeIndex].isActive = 0u;
+    cubes[cubeIndex].globalIndex = 0xffffffffu;
+    cubes[cubeIndex].pos = vec4<f32>(0.0);
     return;
   }
   massPoint /= count;
@@ -1981,6 +1983,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   }
 
   cubes[cubeIndex].isActive = 1u;
+  cubes[cubeIndex].globalIndex = cubeGlobalIndex(ix, iy, localZ);
   cubes[cubeIndex].pos = vec4<f32>(p, 1.0);
 }
 `;
@@ -2080,7 +2083,12 @@ ${decode}
   var p1 = cubes[cubeIds[1]].pos.xyz;
   var p2 = cubes[cubeIds[2]].pos.xyz;
   var p3 = cubes[cubeIds[3]].pos.xyz;
-  if (cubes[cubeIds[0]].isActive == 0u || cubes[cubeIds[1]].isActive == 0u || cubes[cubeIds[2]].isActive == 0u || cubes[cubeIds[3]].isActive == 0u) {
+  if (
+    cubes[cubeIds[0]].isActive == 0u || cubes[cubeIds[0]].globalIndex != globalIds[0] ||
+    cubes[cubeIds[1]].isActive == 0u || cubes[cubeIds[1]].globalIndex != globalIds[1] ||
+    cubes[cubeIds[2]].isActive == 0u || cubes[cubeIds[2]].globalIndex != globalIds[2] ||
+    cubes[cubeIds[3]].isActive == 0u || cubes[cubeIds[3]].globalIndex != globalIds[3]
+  ) {
     return;
   }
 
@@ -2137,6 +2145,12 @@ function buildCountShader(solidWGSL: string, solidBindings: PreparedSolidBinding
     cubeBufferIndex(ix, iy - 1u, localZ),
     cubeBufferIndex(ix, iy, localZ),
   );
+  let globalIds = array<u32, 4>(
+    cubeGlobalIndex(ix, iy, localZ - 1u),
+    cubeGlobalIndex(ix, iy - 1u, localZ - 1u),
+    cubeGlobalIndex(ix, iy - 1u, localZ),
+    cubeGlobalIndex(ix, iy, localZ),
+  );
 `
     : axis === 'y'
       ? `
@@ -2162,6 +2176,12 @@ function buildCountShader(solidWGSL: string, solidBindings: PreparedSolidBinding
     cubeBufferIndex(ix, iy, localZ - 1u),
     cubeBufferIndex(ix, iy, localZ),
   );
+  let globalIds = array<u32, 4>(
+    cubeGlobalIndex(ix - 1u, iy, localZ),
+    cubeGlobalIndex(ix - 1u, iy, localZ - 1u),
+    cubeGlobalIndex(ix, iy, localZ - 1u),
+    cubeGlobalIndex(ix, iy, localZ),
+  );
 `
       : `
   let total = (params.nx + 1u) * (params.ny + 1u) * batch.localZCount;
@@ -2185,6 +2205,12 @@ function buildCountShader(solidWGSL: string, solidBindings: PreparedSolidBinding
     cubeBufferIndex(ix - 1u, iy, localZ),
     cubeBufferIndex(ix, iy, localZ),
   );
+  let globalIds = array<u32, 4>(
+    cubeGlobalIndex(ix, iy - 1u, localZ),
+    cubeGlobalIndex(ix - 1u, iy - 1u, localZ),
+    cubeGlobalIndex(ix - 1u, iy, localZ),
+    cubeGlobalIndex(ix, iy, localZ),
+  );
 `;
 
   return /* wgsl */`
@@ -2197,7 +2223,12 @@ ${wgslHeader(solidWGSL, solidBindings)}
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let i = gid.x;
 ${decode}
-  if (cubes[ids[0]].isActive == 0u || cubes[ids[1]].isActive == 0u || cubes[ids[2]].isActive == 0u || cubes[ids[3]].isActive == 0u) {
+  if (
+    cubes[ids[0]].isActive == 0u || cubes[ids[0]].globalIndex != globalIds[0] ||
+    cubes[ids[1]].isActive == 0u || cubes[ids[1]].globalIndex != globalIds[1] ||
+    cubes[ids[2]].isActive == 0u || cubes[ids[2]].globalIndex != globalIds[2] ||
+    cubes[ids[3]].isActive == 0u || cubes[ids[3]].globalIndex != globalIds[3]
+  ) {
     counts[i] = 0u;
     return;
   }

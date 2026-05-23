@@ -14,6 +14,7 @@ func Mesh2DSolid(m2 *model2d.Mesh) ShapeKernel {
 	nodeMaxName := genFunctionID(&ids, "mesh2d_node_max")
 	rayBoundsName := genFunctionID(&ids, "mesh2d_ray_bounds")
 	segmentHitName := genFunctionID(&ids, "mesh2d_segment_hit")
+	rayCastName := genFunctionID(&ids, "mesh2d_ray_cast")
 	segBufName := genBufferID(&ids, "segments")
 	nodeBoundsBufName := genBufferID(&ids, "node_bounds")
 	nodeDataBufName := genBufferID(&ids, "node_data")
@@ -73,12 +74,12 @@ func Mesh2DSolid(m2 *model2d.Mesh) ShapeKernel {
 				return maxFrac >= minFrac && maxFrac >= 0.0;
 			}
 
-			fn {{.SegmentHit}}(origin: vec2<f32>, dir: vec2<f32>, p1: vec2<f32>, p2: vec2<f32>) -> bool {
+			fn {{.SegmentHit}}(origin: vec2<f32>, dir: vec2<f32>, p1: vec2<f32>, p2: vec2<f32>) -> vec2<f32> {
 				let v = p2 - p1;
 				let det = v.x * dir.y - v.y * dir.x;
 				let eps = 1e-5 * length(v) * length(dir);
 				if (abs(det) <= eps) {
-					return false;
+					return vec2<f32>(0.0, 0.0);
 				}
 
 				let rhs = origin - p1;
@@ -88,17 +89,19 @@ func Mesh2DSolid(m2 *model2d.Mesh) ShapeKernel {
 				);
 				let segT = result.x;
 				let rayT = result.y;
-				return segT >= 0.0 && segT < 1.0 && rayT >= 0.0;
+				let hit = segT >= 0.0 && segT < 1.0 && rayT >= 0.0;
+				let edgeFraction = min(min(abs(segT), abs(segT - 1.0)), abs(rayT));
+				return vec2<f32>(select(0.0, 1.0, hit), edgeFraction);
 			}
 
-			fn {{.Entrypoint}}(p: vec2<f32>) -> bool {
+			fn {{.RayCast}}(p: vec2<f32>, dir: vec2<f32>) -> vec2<f32> {
 				let numNodes = {{.NumNodes}}u;
 				if (numNodes == 0u) {
-					return false;
+					return vec2<f32>(0.0, 1e30);
 				}
 
-				let dir = vec2<f32>(0.5224892708603626, 0.10494477243214506);
 				var numIntersections = 0u;
+				var minEdgeFraction = 1e30;
 				var nodeIdx = 0u;
 				loop {
 					if (nodeIdx >= numNodes) {
@@ -122,15 +125,26 @@ func Mesh2DSolid(m2 *model2d.Mesh) ShapeKernel {
 							let segOffset = segIdx * 4u;
 							let p1 = vec2<f32>({{.Segments}}[segOffset], {{.Segments}}[segOffset+1u]);
 							let p2 = vec2<f32>({{.Segments}}[segOffset+2u], {{.Segments}}[segOffset+3u]);
-							if ({{.SegmentHit}}(p, dir, p1, p2)) {
+							let hitResult = {{.SegmentHit}}(p, dir, p1, p2);
+							if (hitResult.x >= 0.5) {
 								numIntersections += 1u;
 							}
+							minEdgeFraction = min(minEdgeFraction, hitResult.y);
 						}
 					}
 
 					nodeIdx += 1u;
 				}
-				return (numIntersections & 1u) == 1u;
+				return vec2<f32>(f32(numIntersections & 1u), minEdgeFraction);
+			}
+
+			fn {{.Entrypoint}}(p: vec2<f32>) -> bool {
+				let first = {{.RayCast}}(p, vec2<f32>(0.5224892708603626, 0.10494477243214506));
+				let second = {{.RayCast}}(p, vec2<f32>(0.10494477243214506, 0.5224892708603626));
+				if (second.y > first.y) {
+					return second.x >= 0.5;
+				}
+				return first.x >= 0.5;
 			}
 		`,
 			"NodeMin", nodeMinName,
@@ -138,6 +152,7 @@ func Mesh2DSolid(m2 *model2d.Mesh) ShapeKernel {
 			"NodeMax", nodeMaxName,
 			"RayBounds", rayBoundsName,
 			"SegmentHit", segmentHitName,
+			"RayCast", rayCastName,
 			"Entrypoint", entrypointName,
 			"NumNodes", numNodes,
 			"NodeData", nodeDataBufName,
