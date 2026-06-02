@@ -1,6 +1,22 @@
 import { CPUMesh, type CPUTriangle, type IndexedMesh } from './mesh';
 import { qefWGSL } from './qef_wgsl';
 import {
+  GPUBufferUsage,
+  GPUMapMode,
+  GPUShaderStage,
+  type GPUBindGroup,
+  type GPUBindGroupLayout,
+  type GPUBuffer,
+  type GPUBufferSource,
+  type GPUCommandEncoder,
+  type GPUCompilationMessage,
+  type GPUComputePassEncoder,
+  type GPUComputePipeline,
+  type GPUDevice,
+  type GPUPipelineLayout,
+  type GPUShaderModule,
+} from './webgpu_types';
+import {
   createSolidBindGroup,
   createSolidBindGroupLayout,
   prepareSolidBindings,
@@ -20,9 +36,6 @@ import {
   type Vec3,
 } from './vec3';
 
-const GPUBufferUsageAny: any = (globalThis as any).GPUBufferUsage;
-const GPUMapModeAny: any = (globalThis as any).GPUMapMode;
-const GPUShaderStageAny: any = (globalThis as any).GPUShaderStage;
 
 export interface DualContourResult {
   /** Mesh emitted directly from the GPU passes, before CPU repair. */
@@ -61,7 +74,7 @@ export interface DualContourSolidBinding {
   /**
    * Typed array / ArrayBuffer data to upload, or an existing GPUBuffer.
    */
-  source: BufferSource | any;
+  source: GPUBufferSource | GPUBuffer;
   /**
    * Optional binding size in bytes when source is a GPUBuffer.
    */
@@ -73,7 +86,7 @@ export interface DualContourSolidBinding {
 }
 
 export interface DualContouringWebGPUOptions {
-  device: any;
+  device: GPUDevice;
   /**
    * WGSL source that defines:
    *   fn solidOccupancy(p: vec3<f32>) -> bool
@@ -211,84 +224,84 @@ export async function dualContourWebGPU(options: DualContouringWebGPUOptions): P
   const cornerBuffer = device.createBuffer({
     label: `${config.label}-corners`,
     size: cornerBufferSize,
-    usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_SRC,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
   });
   const xEdgeBuffer = device.createBuffer({
     label: `${config.label}-x-edges`,
     size: xEdgeBufferSize,
-    usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_SRC,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
   });
   const yEdgeBuffer = device.createBuffer({
     label: `${config.label}-y-edges`,
     size: yEdgeBufferSize,
-    usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_SRC,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
   });
   const zEdgeBuffer = device.createBuffer({
     label: `${config.label}-z-edges`,
     size: zEdgeBufferSize,
-    usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_SRC,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
   });
   const cubeBuffer = device.createBuffer({
     label: `${config.label}-cubes`,
     size: cubeBufferSize,
-    usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_SRC,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
   });
   const xTriangleCountBuffer = device.createBuffer({
     label: `${config.label}-x-triangle-counts`,
     size: xCountBufferSize,
-    usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_SRC,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
   });
   const yTriangleCountBuffer = device.createBuffer({
     label: `${config.label}-y-triangle-counts`,
     size: yCountBufferSize,
-    usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_SRC,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
   });
   const zTriangleCountBuffer = device.createBuffer({
     label: `${config.label}-z-triangle-counts`,
     size: zCountBufferSize,
-    usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_SRC,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
   });
   const xTriangleOffsetBuffer = device.createBuffer({
     label: `${config.label}-x-triangle-offsets`,
     size: xCountBufferSize,
-    usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_DST,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
   });
   const yTriangleOffsetBuffer = device.createBuffer({
     label: `${config.label}-y-triangle-offsets`,
     size: yCountBufferSize,
-    usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_DST,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
   });
   const zTriangleOffsetBuffer = device.createBuffer({
     label: `${config.label}-z-triangle-offsets`,
     size: zCountBufferSize,
-    usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_DST,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
   });
   markStage('create GPU buffers');
 
   const staticUniformBuffer = device.createBuffer({
     label: `${config.label}-static-params`,
     size: STATIC_PARAMS_SIZE,
-    usage: GPUBufferUsageAny.UNIFORM | GPUBufferUsageAny.COPY_DST,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
   const cornerRangeBuffer = device.createBuffer({
     label: `${config.label}-corner-range`,
     size: BATCH_PARAMS_SIZE,
-    usage: GPUBufferUsageAny.UNIFORM | GPUBufferUsageAny.COPY_DST,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
   const cubeRangeBuffer = device.createBuffer({
     label: `${config.label}-cube-range`,
     size: BATCH_PARAMS_SIZE,
-    usage: GPUBufferUsageAny.UNIFORM | GPUBufferUsageAny.COPY_DST,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
   const xyEmitRangeBuffer = device.createBuffer({
     label: `${config.label}-xy-emit-range`,
     size: BATCH_PARAMS_SIZE,
-    usage: GPUBufferUsageAny.UNIFORM | GPUBufferUsageAny.COPY_DST,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
   const zEmitRangeBuffer = device.createBuffer({
     label: `${config.label}-z-emit-range`,
     size: BATCH_PARAMS_SIZE,
-    usage: GPUBufferUsageAny.UNIFORM | GPUBufferUsageAny.COPY_DST,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
   device.queue.writeBuffer(staticUniformBuffer, 0, packStaticUniforms(grid, layout, config));
 
@@ -496,22 +509,22 @@ export async function dualContourWebGPU(options: DualContouringWebGPUOptions): P
   const cubeReadback = device.createBuffer({
     label: `${config.label}-cube-readback`,
     size: cubeReadbackSize,
-    usage: GPUBufferUsageAny.COPY_DST | GPUBufferUsageAny.MAP_READ,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
   });
   const xTriangleCountReadback = device.createBuffer({
     label: `${config.label}-x-triangle-counts-readback`,
     size: xCountBufferSize,
-    usage: GPUBufferUsageAny.COPY_DST | GPUBufferUsageAny.MAP_READ,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
   });
   const yTriangleCountReadback = device.createBuffer({
     label: `${config.label}-y-triangle-counts-readback`,
     size: yCountBufferSize,
-    usage: GPUBufferUsageAny.COPY_DST | GPUBufferUsageAny.MAP_READ,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
   });
   const zTriangleCountReadback = device.createBuffer({
     label: `${config.label}-z-triangle-counts-readback`,
     size: zCountBufferSize,
-    usage: GPUBufferUsageAny.COPY_DST | GPUBufferUsageAny.MAP_READ,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
   });
   markStage('create readback buffers');
 
@@ -602,12 +615,12 @@ export async function dualContourWebGPU(options: DualContouringWebGPUOptions): P
     const triangleBuffer = device.createBuffer({
       label: `${config.label}-triangles-${batchIndex}`,
       size: triangleBufferSize,
-      usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_SRC,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
     });
     const triangleReadback = device.createBuffer({
       label: `${config.label}-triangle-readback-${batchIndex}`,
       size: triangleBufferSize,
-      usage: GPUBufferUsageAny.COPY_DST | GPUBufferUsageAny.MAP_READ,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
     });
     const emitXBindGroup = device.createBindGroup({
       layout: emitBindGroupLayout,
@@ -860,7 +873,7 @@ function triangleModeToInt(mode: TriangleMode): number {
   }
 }
 
-function dispatch1D(pass: any, pipeline: any, bindGroup: any, count: number, workgroupSize: number, solidBindGroup?: any): void {
+function dispatch1D(pass: GPUComputePassEncoder, pipeline: GPUComputePipeline, bindGroup: GPUBindGroup, count: number, workgroupSize: number, solidBindGroup?: GPUBindGroup | null): void {
   if (count <= 0) return;
   pass.setPipeline(pipeline);
   pass.setBindGroup(0, bindGroup);
@@ -870,8 +883,8 @@ function dispatch1D(pass: any, pipeline: any, bindGroup: any, count: number, wor
   pass.dispatchWorkgroups(Math.ceil(count / workgroupSize));
 }
 
-async function readBuffer(buffer: any): Promise<ArrayBuffer> {
-  await buffer.mapAsync(GPUMapModeAny.READ);
+async function readBuffer(buffer: GPUBuffer): Promise<ArrayBuffer> {
+  await buffer.mapAsync(GPUMapMode.READ);
   const src = buffer.getMappedRange();
   const out = src.slice(0);
   buffer.unmap();
@@ -879,38 +892,38 @@ async function readBuffer(buffer: any): Promise<ArrayBuffer> {
 }
 
 function createInternalBindGroupLayout(
-  device: any,
+  device: GPUDevice,
   entries: Array<{ binding: number; type: 'uniform' | 'storage' | 'read-only-storage' }>,
-): any {
+): GPUBindGroupLayout {
   return device.createBindGroupLayout({
     entries: entries.map((entry) => ({
       binding: entry.binding,
-      visibility: GPUShaderStageAny.COMPUTE,
+      visibility: GPUShaderStage.COMPUTE,
       buffer: { type: entry.type },
     })),
   });
 }
 
-function createPipelineLayout(device: any, primaryLayout: any, solidBindGroupLayout?: any): any {
+function createPipelineLayout(device: GPUDevice, primaryLayout: GPUBindGroupLayout, solidBindGroupLayout?: GPUBindGroupLayout | null): GPUPipelineLayout {
   return device.createPipelineLayout({
     bindGroupLayouts: solidBindGroupLayout ? [primaryLayout, solidBindGroupLayout] : [primaryLayout],
   });
 }
 
-async function createCheckedShaderModule(device: any, label: string, code: string): Promise<any> {
+async function createCheckedShaderModule(device: GPUDevice, label: string, code: string): Promise<GPUShaderModule> {
   const module = device.createShaderModule({ label, code });
   if (typeof module.getCompilationInfo !== 'function') {
     return module;
   }
   const info = await module.getCompilationInfo();
-  const errors = (info.messages as Array<any>).filter((message) => message.type === 'error');
+  const errors = info.messages.filter((message) => message.type === 'error');
   if (errors.length === 0) {
     return module;
   }
   throw new Error(formatShaderCompilationError(label, errors));
 }
 
-function formatShaderCompilationError(label: string, errors: Array<any>): string {
+function formatShaderCompilationError(label: string, errors: readonly GPUCompilationMessage[]): string {
   const lines = [`WGSL compilation failed for ${label}:`];
   for (const error of errors.slice(0, 8)) {
     const location = typeof error.lineNum === 'number'
@@ -940,9 +953,9 @@ function assertBufferFits(
 }
 
 function copyLogicalCubeRowsToReadback(
-  encoder: any,
-  cubeBuffer: any,
-  cubeReadback: any,
+  encoder: GPUCommandEncoder,
+  cubeBuffer: GPUBuffer,
+  cubeReadback: GPUBuffer,
   layout: BatchLayout,
   ringHead: number,
   localZStart: number,

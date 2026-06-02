@@ -242,24 +242,24 @@ func InsetExtrude(
 func insetExtrudeSideCode(fnName string, z0, z1, radius float32, bottom bool, kind InsetFunction) string {
 	r := float32(math.Abs(float64(radius)))
 	outwards := radius < 0
-	distExpr := Template("z - {{.ZMin}}", "ZMin", z0)
+	distExpr := WGSL("z - {{.ZMin}}", "ZMin", z0)
 	if !bottom {
-		distExpr = Template("{{.ZMax}} - z", "ZMax", z1)
+		distExpr = WGSL("{{.ZMax}} - z", "ZMax", z1)
 	}
 
 	var body string
 	switch kind {
 	case InsetExtrudeChamfer:
 		if outwards {
-			body = Template("return {{.Radius}} * (frac - 1.0);", "Radius", r)
+			body = WGSL("return {{.Radius}} * (frac - 1.0);", "Radius", r)
 		} else {
-			body = Template("return {{.Radius}} * (1.0 - frac);", "Radius", r)
+			body = WGSL("return {{.Radius}} * (1.0 - frac);", "Radius", r)
 		}
 	case InsetExtrudeFillet:
 		if outwards {
-			body = Template("return {{.Radius}} * (sqrt(max(0.0, 1.0 - x*x)) - 1.0);", "Radius", r)
+			body = WGSL("return {{.Radius}} * (sqrt(max(0.0, 1.0 - x*x)) - 1.0);", "Radius", r)
 		} else {
-			body = Template("return {{.Radius}} * (1.0 - sqrt(max(0.0, 1.0 - x*x)));", "Radius", r)
+			body = WGSL("return {{.Radius}} * (1.0 - sqrt(max(0.0, 1.0 - x*x)));", "Radius", r)
 		}
 	default:
 		panic(`inset extrude function must be "chamfer" or "fillet"`)

@@ -163,13 +163,13 @@ func WeightedMetaballSolid(
 
 	k := metaballs[0]
 	k.Buffers = append([]Buffer{}, k.Buffers...)
-	metaballCalls := []string{Template("{{.Fn}}(p)", "Fn", k.EntrypointName)}
+	metaballCalls := []string{WGSL("{{.Fn}}(p)", "Fn", k.EntrypointName)}
 	for i := 1; i < len(metaballs); i++ {
 		nextK := ShiftIDs(metaballs[i], k.IDs)
 		k.IDs = nextK.IDs
 		k.Buffers = append(k.Buffers, nextK.Buffers...)
 		k.Code += "\n" + nextK.Code
-		metaballCalls = append(metaballCalls, Template("{{.Fn}}(p)", "Fn", nextK.EntrypointName))
+		metaballCalls = append(metaballCalls, WGSL("{{.Fn}}(p)", "Fn", nextK.EntrypointName))
 	}
 
 	falloff = ShiftIDs(falloff, k.IDs)
@@ -178,7 +178,7 @@ func WeightedMetaballSolid(
 	k.Code += "\n" + falloff.Code
 	sumCode := make([]string, len(metaballCalls))
 	for i, call := range metaballCalls {
-		sumCode[i] = Template("{{.Weight}} * {{.Falloff}}({{.Call}})",
+		sumCode[i] = WGSL("{{.Weight}} * {{.Falloff}}({{.Call}})",
 			"Weight", weights[i],
 			"Falloff", falloff.EntrypointName,
 			"Call", call,

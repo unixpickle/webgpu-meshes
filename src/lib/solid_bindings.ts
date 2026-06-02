@@ -1,12 +1,20 @@
-const GPUBufferUsageAny: any = (globalThis as any).GPUBufferUsage;
-const GPUShaderStageAny: any = (globalThis as any).GPUShaderStage;
+import {
+  GPUBufferUsage,
+  GPUShaderStage,
+  type GPUBindGroup,
+  type GPUBindGroupLayout,
+  type GPUBuffer,
+  type GPUBufferSource,
+  type GPUCommandEncoder,
+  type GPUDevice,
+} from './webgpu_types';
 
 export interface SolidBindingInput {
   name: string;
   kind: 'uniform' | 'storage';
   wgslType: string;
   wgslDefs?: string;
-  source: BufferSource | any;
+  source: GPUBufferSource | GPUBuffer;
   size?: number;
   label?: string;
 }
@@ -19,7 +27,7 @@ interface ResolvedSolidBinding {
   wgslDefs: string;
   label: string | undefined;
   size: number;
-  source: BufferSource | any;
+  source: GPUBufferSource | GPUBuffer;
   runtimeArray: RuntimeArrayInfo | null;
 }
 
@@ -37,7 +45,7 @@ interface PackedBindingRewrite {
 export interface PreparedBindingResource {
   binding: number;
   kind: 'uniform' | 'storage';
-  buffer: any;
+  buffer: GPUBuffer;
   size: number;
   declaration: string;
 }
@@ -49,7 +57,7 @@ export interface PreparedSolidBindings {
 }
 
 export function prepareSolidBindings(
-  device: any,
+  device: GPUDevice,
   solidBindings: SolidBindingInput[],
   label: string,
   errorPrefix: string,
@@ -128,11 +136,11 @@ export function transformSolidWGSL(source: string, solidBindings: PreparedSolidB
   return rewriteSolidWGSL(source, solidBindings.rewriteState as Map<string, PackedBindingRewrite>);
 }
 
-export function createSolidBindGroupLayout(device: any, solidBindings: PreparedSolidBindings): any {
+export function createSolidBindGroupLayout(device: GPUDevice, solidBindings: PreparedSolidBindings): GPUBindGroupLayout {
   return device.createBindGroupLayout({
     entries: solidBindings.bindings.map((binding) => ({
       binding: binding.binding,
-      visibility: GPUShaderStageAny.COMPUTE,
+      visibility: GPUShaderStage.COMPUTE,
       buffer: {
         type: binding.kind === 'uniform' ? 'uniform' : 'read-only-storage',
       },
@@ -140,7 +148,7 @@ export function createSolidBindGroupLayout(device: any, solidBindings: PreparedS
   });
 }
 
-export function createSolidBindGroup(device: any, layout: any, solidBindings: PreparedSolidBindings): any {
+export function createSolidBindGroup(device: GPUDevice, layout: GPUBindGroupLayout, solidBindings: PreparedSolidBindings): GPUBindGroup {
   return device.createBindGroup({
     layout,
     entries: solidBindings.bindings.map((binding) => ({
@@ -195,7 +203,7 @@ function validateSolidBinding(
   }
 }
 
-function getSolidBindingSize(source: BufferSource | any, requestedSize: number | undefined, bindingIndex: number, errorPrefix: string): number {
+function getSolidBindingSize(source: GPUBufferSource | GPUBuffer, requestedSize: number | undefined, bindingIndex: number, errorPrefix: string): number {
   if (isBufferSource(source)) {
     const size = source.byteLength;
     if (size <= 0) {
@@ -215,13 +223,13 @@ function getSolidBindingSize(source: BufferSource | any, requestedSize: number |
 }
 
 function materializeStandaloneBinding(
-  device: any,
+  device: GPUDevice,
   binding: ResolvedSolidBinding,
   label: string,
   errorPrefix: string,
-): { buffer: any; size: number } {
+): { buffer: GPUBuffer; size: number } {
   if (isBufferSource(binding.source)) {
-    const usage = (binding.kind === 'uniform' ? GPUBufferUsageAny.UNIFORM : GPUBufferUsageAny.STORAGE) | GPUBufferUsageAny.COPY_DST;
+    const usage = (binding.kind === 'uniform' ? GPUBufferUsage.UNIFORM : GPUBufferUsage.STORAGE) | GPUBufferUsage.COPY_DST;
     const buffer = device.createBuffer({
       label: binding.label ?? `${label}-solid-binding-${binding.index}-${binding.name}`,
       size: binding.size,
@@ -231,8 +239,8 @@ function materializeStandaloneBinding(
     return { buffer, size: binding.size };
   }
 
-  const source = binding.source as { usage?: number; size: number };
-  const requiredUsage = binding.kind === 'uniform' ? GPUBufferUsageAny.UNIFORM : GPUBufferUsageAny.STORAGE;
+  const source = binding.source;
+  const requiredUsage = binding.kind === 'uniform' ? GPUBufferUsage.UNIFORM : GPUBufferUsage.STORAGE;
   const usage = typeof source.usage === 'number' ? source.usage : 0;
   if ((usage & requiredUsage) === 0) {
     throw new Error(`${errorPrefix}: solidBindings[${binding.index}] GPUBuffer is missing ${binding.kind.toUpperCase()} usage.`);
@@ -247,22 +255,22 @@ function buildStandaloneDeclaration(bindingIndex: number, binding: ResolvedSolid
 }
 
 function materializePackedRuntimeArrayGroup(
-  device: any,
+  device: GPUDevice,
   bindings: ResolvedSolidBinding[],
   label: string,
   bindingIndex: number,
   packedName: string,
   errorPrefix: string,
-): { buffer: any; size: number; rewrites: Map<string, PackedBindingRewrite> } {
+): { buffer: GPUBuffer; size: number; rewrites: Map<string, PackedBindingRewrite> } {
   const totalSize = bindings.reduce((sum, binding) => sum + binding.size, 0);
   const buffer = device.createBuffer({
     label: `${label}-solid-packed-${bindingIndex}`,
     size: totalSize,
-    usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_DST,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
   });
 
   const rewrites = new Map<string, PackedBindingRewrite>();
-  let encoder: any = null;
+  let encoder: GPUCommandEncoder | null = null;
   let currentOffset = 0;
   for (const binding of bindings) {
     const runtimeArray = binding.runtimeArray!;
@@ -275,9 +283,9 @@ function materializePackedRuntimeArrayGroup(
     if (isBufferSource(binding.source)) {
       writeSolidBindingBuffer(device, buffer, currentOffset, binding.source);
     } else {
-      const source = binding.source as { usage?: number };
+      const source = binding.source;
       const usage = typeof source.usage === 'number' ? source.usage : 0;
-      if ((usage & GPUBufferUsageAny.COPY_SRC) === 0) {
+      if ((usage & GPUBufferUsage.COPY_SRC) === 0) {
         throw new Error(
           `${errorPrefix}: solidBindings[${binding.index}] GPUBuffer must include COPY_SRC usage so it can be packed into ${packedName}.`,
         );
@@ -521,7 +529,7 @@ function splitTopLevelArgs(text: string): string[] {
   return parts.filter((part) => part.length > 0);
 }
 
-function writeSolidBindingBuffer(device: any, buffer: any, offset: number, source: BufferSource): void {
+function writeSolidBindingBuffer(device: GPUDevice, buffer: GPUBuffer, offset: number, source: GPUBufferSource): void {
   if (source instanceof ArrayBuffer) {
     device.queue.writeBuffer(buffer, offset, source);
   } else {
@@ -529,7 +537,7 @@ function writeSolidBindingBuffer(device: any, buffer: any, offset: number, sourc
   }
 }
 
-function isBufferSource(value: unknown): value is BufferSource {
+function isBufferSource(value: unknown): value is GPUBufferSource {
   return value instanceof ArrayBuffer || ArrayBuffer.isView(value);
 }
 

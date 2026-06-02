@@ -153,7 +153,7 @@ func Scale(k ShapeKernel, scales Vector) ShapeKernel {
 	absScale := absScaleFactor(k.Kind, scales)
 	scaleCode := ""
 	if k.Kind == SDF2D || k.Kind == SDF3D {
-		scaleCode = Template(" * {{.AbsScale}}", "AbsScale", absScale)
+		scaleCode = WGSL(" * {{.AbsScale}}", "AbsScale", absScale)
 	}
 	fnName := genFunctionID(&k.IDs, "scale")
 	AppendWGSL(&k, `

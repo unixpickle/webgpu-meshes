@@ -3,7 +3,7 @@ package shapekernel
 type Vec2 [2]float32
 
 func (v Vec2) WebGPUVec() string {
-	return Template("vec2<f32>({{.X}}, {{.Y}})", "X", v[0], "Y", v[1])
+	return WGSL("vec2<f32>({{.X}}, {{.Y}})", "X", v[0], "Y", v[1])
 }
 
 func (v Vec2) Dim() int {
@@ -17,7 +17,7 @@ func (v Vec2) At(i int) float32 {
 type Vec3 [3]float32
 
 func (v Vec3) WebGPUVec() string {
-	return Template("vec3<f32>({{.X}}, {{.Y}}, {{.Z}})", "X", v[0], "Y", v[1], "Z", v[2])
+	return WGSL("vec3<f32>({{.X}}, {{.Y}}, {{.Z}})", "X", v[0], "Y", v[1], "Z", v[2])
 }
 
 func (v Vec3) Dim() int {

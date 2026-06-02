@@ -104,13 +104,13 @@ func solidBooleanOp(solids []ShapeKernel, op, name string) ShapeKernel {
 
 	k := solids[0]
 	k.Buffers = append([]Buffer{}, k.Buffers...)
-	orCode := []string{Template("{{.Fn}}(p)", "Fn", k.EntrypointName)}
+	orCode := []string{WGSL("{{.Fn}}(p)", "Fn", k.EntrypointName)}
 	for i := 1; i < len(solids); i++ {
 		nextK := ShiftIDs(solids[i], k.IDs)
 		k.IDs = nextK.IDs
 		k.Buffers = append(k.Buffers, nextK.Buffers...)
 		k.Code += "\n" + nextK.Code
-		orCode = append(orCode, Template("{{.Fn}}(p)", "Fn", nextK.EntrypointName))
+		orCode = append(orCode, WGSL("{{.Fn}}(p)", "Fn", nextK.EntrypointName))
 	}
 
 	fnName := genFunctionID(&k.IDs, name+"_solid")
@@ -172,16 +172,16 @@ func clipFieldKernel(ids IDTracker, kind ShapeKind, minVec, maxVec Vector) (Shap
 		if !math.IsInf(float64(minVal), -1) {
 			name := "outside_" + strconv.Itoa(outsideIdx)
 			outsideIdx++
-			outsideLets = append(outsideLets, Template("let {{.Name}} = max({{.Min}} - p.{{.Component}}, 0.0);", "Name", name, "Min", minVal, "Component", component))
+			outsideLets = append(outsideLets, WGSL("let {{.Name}} = max({{.Min}} - p.{{.Component}}, 0.0);", "Name", name, "Min", minVal, "Component", component))
 			outsideTerms = append(outsideTerms, name)
-			insideTerms = append(insideTerms, Template("p.{{.Component}} - {{.Min}}", "Component", component, "Min", minVal))
+			insideTerms = append(insideTerms, WGSL("p.{{.Component}} - {{.Min}}", "Component", component, "Min", minVal))
 		}
 		if !math.IsInf(float64(maxVal), 1) {
 			name := "outside_" + strconv.Itoa(outsideIdx)
 			outsideIdx++
-			outsideLets = append(outsideLets, Template("let {{.Name}} = max(p.{{.Component}} - {{.Max}}, 0.0);", "Name", name, "Component", component, "Max", maxVal))
+			outsideLets = append(outsideLets, WGSL("let {{.Name}} = max(p.{{.Component}} - {{.Max}}, 0.0);", "Name", name, "Component", component, "Max", maxVal))
 			outsideTerms = append(outsideTerms, name)
-			insideTerms = append(insideTerms, Template("{{.Max}} - p.{{.Component}}", "Max", maxVal, "Component", component))
+			insideTerms = append(insideTerms, WGSL("{{.Max}} - p.{{.Component}}", "Max", maxVal, "Component", component))
 		}
 	}
 
@@ -189,14 +189,14 @@ func clipFieldKernel(ids IDTracker, kind ShapeKind, minVec, maxVec Vector) (Shap
 	if len(outsideTerms) > 1 {
 		squaredTerms := make([]string, len(outsideTerms))
 		for i, term := range outsideTerms {
-			squaredTerms[i] = Template("{{.Term}} * {{.Term}}", "Term", term)
+			squaredTerms[i] = WGSL("{{.Term}} * {{.Term}}", "Term", term)
 		}
-		outsideExpr = Template("sqrt({{.Expr}})", "Expr", strings.Join(squaredTerms, " + "))
+		outsideExpr = WGSL("sqrt({{.Expr}})", "Expr", strings.Join(squaredTerms, " + "))
 	}
 
 	insideExpr := insideTerms[0]
 	for _, term := range insideTerms[1:] {
-		insideExpr = Template("min({{.Left}}, {{.Right}})", "Left", insideExpr, "Right", term)
+		insideExpr = WGSL("min({{.Left}}, {{.Right}})", "Left", insideExpr, "Right", term)
 	}
 
 	entrypointName := genFunctionID(&ids, "clip_field")
@@ -232,10 +232,10 @@ func clipConditions(dim int, minVec, maxVec Vector) []string {
 			panic("invalid clip bounds")
 		}
 		if !math.IsInf(float64(minVal), -1) {
-			conditions = append(conditions, Template("p.{{.Component}} >= {{.Min}}", "Component", component, "Min", minVal))
+			conditions = append(conditions, WGSL("p.{{.Component}} >= {{.Min}}", "Component", component, "Min", minVal))
 		}
 		if !math.IsInf(float64(maxVal), 1) {
-			conditions = append(conditions, Template("p.{{.Component}} <= {{.Max}}", "Component", component, "Max", maxVal))
+			conditions = append(conditions, WGSL("p.{{.Component}} <= {{.Max}}", "Component", component, "Max", maxVal))
 		}
 	}
 	return conditions
@@ -281,19 +281,19 @@ func sdfBooleanOp(sdfs []ShapeKernel, op, name string) ShapeKernel {
 
 	k := sdfs[0]
 	k.Buffers = append([]Buffer{}, k.Buffers...)
-	callCode := []string{Template("{{.Fn}}(p)", "Fn", k.EntrypointName)}
+	callCode := []string{WGSL("{{.Fn}}(p)", "Fn", k.EntrypointName)}
 	for i := 1; i < len(sdfs); i++ {
 		nextK := ShiftIDs(sdfs[i], k.IDs)
 		k.IDs = nextK.IDs
 		k.Buffers = append(k.Buffers, nextK.Buffers...)
 		k.Code += "\n" + nextK.Code
-		callCode = append(callCode, Template("{{.Fn}}(p)", "Fn", nextK.EntrypointName))
+		callCode = append(callCode, WGSL("{{.Fn}}(p)", "Fn", nextK.EntrypointName))
 	}
 
 	fnName := genFunctionID(&k.IDs, name+"_sdf")
 	valueExpr := callCode[0]
 	for _, call := range callCode[1:] {
-		valueExpr = Template("{{.Op}}({{.Left}}, {{.Right}})", "Op", op, "Left", valueExpr, "Right", call)
+		valueExpr = WGSL("{{.Op}}({{.Left}}, {{.Right}})", "Op", op, "Left", valueExpr, "Right", call)
 	}
 	AppendWGSL(&k, `
 			fn {{.Entrypoint}}(p: {{.ArgType}}) -> f32 {

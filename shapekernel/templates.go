@@ -42,17 +42,14 @@ func wgslFloatLiteral(v float64, bitSize int) string {
 	return s + ".0"
 }
 
-func Template(src string, args ...any) string {
+func WGSL(src string, args ...any) string {
+	src = Dedent(src)
 	tmpl := template.Must(template.New("wgsl").Option("missingkey=error").Parse(src))
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, TV(args...)); err != nil {
 		panic(err)
 	}
 	return buf.String()
-}
-
-func WGSL(src string, args ...any) string {
-	return Template(Dedent(src), args...)
 }
 
 func AppendWGSL(k *ShapeKernel, src string, args ...any) {

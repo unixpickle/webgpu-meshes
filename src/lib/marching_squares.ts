@@ -1,4 +1,19 @@
 import {
+  GPUBufferUsage,
+  GPUMapMode,
+  GPUShaderStage,
+  type GPUBindGroup,
+  type GPUBindGroupLayout,
+  type GPUBuffer,
+  type GPUCommandEncoder,
+  type GPUCompilationMessage,
+  type GPUComputePassEncoder,
+  type GPUComputePipeline,
+  type GPUDevice,
+  type GPUPipelineLayout,
+  type GPUShaderModule,
+} from './webgpu_types';
+import {
   createSolidBindGroup,
   createSolidBindGroupLayout,
   prepareSolidBindings,
@@ -7,9 +22,6 @@ import {
 } from './solid_bindings';
 import type { DualContourSolidBinding } from './dual_contouring';
 
-const GPUBufferUsageAny: any = (globalThis as any).GPUBufferUsage;
-const GPUMapModeAny: any = (globalThis as any).GPUMapMode;
-const GPUShaderStageAny: any = (globalThis as any).GPUShaderStage;
 
 const DEFAULT_MARCHING_SQUARES_BUFFER_SIZE = 1_000_000;
 const STATIC_PARAMS_SIZE = 48;
@@ -58,7 +70,7 @@ export interface MarchingSquaresStageTiming {
 }
 
 export interface MarchingSquaresWebGPUOptions {
-  device: any;
+  device: GPUDevice;
   /**
    * WGSL source that defines:
    *   fn solidOccupancy(p: vec2<f32>) -> bool
@@ -161,44 +173,44 @@ export async function marchingSquaresWebGPU(options: MarchingSquaresWebGPUOption
   const cornerBuffer = device.createBuffer({
     label: `${config.label}-ms-corners`,
     size: cornerBufferSize,
-    usage: GPUBufferUsageAny.STORAGE,
+    usage: GPUBufferUsage.STORAGE,
   });
   const xEdgeBuffer = device.createBuffer({
     label: `${config.label}-ms-x-edges`,
     size: xEdgeBufferSize,
-    usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_SRC,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
   });
   const yEdgeBuffer = device.createBuffer({
     label: `${config.label}-ms-y-edges`,
     size: yEdgeBufferSize,
-    usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_SRC,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
   });
   const squareSegmentCountBuffer = device.createBuffer({
     label: `${config.label}-ms-segment-counts`,
     size: squareCountBufferSize,
-    usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_SRC,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
   });
   const squareSegmentOffsetBuffer = device.createBuffer({
     label: `${config.label}-ms-segment-offsets`,
     size: squareCountBufferSize,
-    usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_DST,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
   });
   markStage('create GPU buffers');
 
   const staticUniformBuffer = device.createBuffer({
     label: `${config.label}-ms-static-params`,
     size: STATIC_PARAMS_SIZE,
-    usage: GPUBufferUsageAny.UNIFORM | GPUBufferUsageAny.COPY_DST,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
   const cornerRangeBuffer = device.createBuffer({
     label: `${config.label}-ms-corner-range`,
     size: BATCH_PARAMS_SIZE,
-    usage: GPUBufferUsageAny.UNIFORM | GPUBufferUsageAny.COPY_DST,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
   const squareRangeBuffer = device.createBuffer({
     label: `${config.label}-ms-square-range`,
     size: BATCH_PARAMS_SIZE,
-    usage: GPUBufferUsageAny.UNIFORM | GPUBufferUsageAny.COPY_DST,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
   device.queue.writeBuffer(staticUniformBuffer, 0, packStaticUniforms(grid, layout, config));
 
@@ -304,17 +316,17 @@ export async function marchingSquaresWebGPU(options: MarchingSquaresWebGPUOption
   const xEdgeReadback = device.createBuffer({
     label: `${config.label}-ms-x-edge-readback`,
     size: xEdgeReadbackSize,
-    usage: GPUBufferUsageAny.COPY_DST | GPUBufferUsageAny.MAP_READ,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
   });
   const yEdgeReadback = device.createBuffer({
     label: `${config.label}-ms-y-edge-readback`,
     size: yEdgeReadbackSize,
-    usage: GPUBufferUsageAny.COPY_DST | GPUBufferUsageAny.MAP_READ,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
   });
   const squareCountReadback = device.createBuffer({
     label: `${config.label}-ms-count-readback`,
     size: squareCountBufferSize,
-    usage: GPUBufferUsageAny.COPY_DST | GPUBufferUsageAny.MAP_READ,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
   });
   markStage('create readback buffers');
 
@@ -377,12 +389,12 @@ export async function marchingSquaresWebGPU(options: MarchingSquaresWebGPUOption
     const segmentBuffer = device.createBuffer({
       label: `${config.label}-ms-segments-${batchIndex}`,
       size: segmentBufferSize,
-      usage: GPUBufferUsageAny.STORAGE | GPUBufferUsageAny.COPY_SRC,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
     });
     const segmentReadback = device.createBuffer({
       label: `${config.label}-ms-segment-readback-${batchIndex}`,
       size: segmentBufferSize,
-      usage: GPUBufferUsageAny.COPY_DST | GPUBufferUsageAny.MAP_READ,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
     });
     const emitBindGroup = device.createBindGroup({
       layout: emitBindGroupLayout,
@@ -574,7 +586,7 @@ function packBatchUniforms(
   return buffer;
 }
 
-function dispatch1D(pass: any, pipeline: any, bindGroup: any, count: number, workgroupSize: number, solidBindGroup?: any): void {
+function dispatch1D(pass: GPUComputePassEncoder, pipeline: GPUComputePipeline, bindGroup: GPUBindGroup, count: number, workgroupSize: number, solidBindGroup?: GPUBindGroup | null): void {
   if (count <= 0) return;
   pass.setPipeline(pipeline);
   pass.setBindGroup(0, bindGroup);
@@ -584,8 +596,8 @@ function dispatch1D(pass: any, pipeline: any, bindGroup: any, count: number, wor
   pass.dispatchWorkgroups(Math.ceil(count / workgroupSize));
 }
 
-async function readBuffer(buffer: any): Promise<ArrayBuffer> {
-  await buffer.mapAsync(GPUMapModeAny.READ);
+async function readBuffer(buffer: GPUBuffer): Promise<ArrayBuffer> {
+  await buffer.mapAsync(GPUMapMode.READ);
   const src = buffer.getMappedRange();
   const out = src.slice(0);
   buffer.unmap();
@@ -593,38 +605,38 @@ async function readBuffer(buffer: any): Promise<ArrayBuffer> {
 }
 
 function createInternalBindGroupLayout(
-  device: any,
+  device: GPUDevice,
   entries: Array<{ binding: number; type: 'uniform' | 'storage' | 'read-only-storage' }>,
-): any {
+): GPUBindGroupLayout {
   return device.createBindGroupLayout({
     entries: entries.map((entry) => ({
       binding: entry.binding,
-      visibility: GPUShaderStageAny.COMPUTE,
+      visibility: GPUShaderStage.COMPUTE,
       buffer: { type: entry.type },
     })),
   });
 }
 
-function createPipelineLayout(device: any, primaryLayout: any, solidBindGroupLayout?: any): any {
+function createPipelineLayout(device: GPUDevice, primaryLayout: GPUBindGroupLayout, solidBindGroupLayout?: GPUBindGroupLayout | null): GPUPipelineLayout {
   return device.createPipelineLayout({
     bindGroupLayouts: solidBindGroupLayout ? [primaryLayout, solidBindGroupLayout] : [primaryLayout],
   });
 }
 
-async function createCheckedShaderModule(device: any, label: string, code: string): Promise<any> {
+async function createCheckedShaderModule(device: GPUDevice, label: string, code: string): Promise<GPUShaderModule> {
   const module = device.createShaderModule({ label, code });
   if (typeof module.getCompilationInfo !== 'function') {
     return module;
   }
   const info = await module.getCompilationInfo();
-  const errors = (info.messages as Array<any>).filter((message) => message.type === 'error');
+  const errors = info.messages.filter((message) => message.type === 'error');
   if (errors.length === 0) {
     return module;
   }
   throw new Error(formatShaderCompilationError(label, errors));
 }
 
-function formatShaderCompilationError(label: string, errors: Array<any>): string {
+function formatShaderCompilationError(label: string, errors: readonly GPUCompilationMessage[]): string {
   const lines = [`WGSL compilation failed for ${label}:`];
   for (const error of errors.slice(0, 8)) {
     const location = typeof error.lineNum === 'number'
@@ -654,9 +666,9 @@ function assertBufferFits(
 }
 
 function copyLogicalRowsToReadback(
-  encoder: any,
-  srcBuffer: any,
-  dstBuffer: any,
+  encoder: GPUCommandEncoder,
+  srcBuffer: GPUBuffer,
+  dstBuffer: GPUBuffer,
   rowBytes: number,
   ringRows: number,
   ringHead: number,

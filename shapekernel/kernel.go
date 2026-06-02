@@ -38,7 +38,7 @@ func (s ShapeKind) ArgType() string {
 	if s == FalloffFunc {
 		return "f32"
 	}
-	return Template("vec{{.Dim}}<f32>", "Dim", s.Dim())
+	return WGSL("vec{{.Dim}}<f32>", "Dim", s.Dim())
 }
 
 func (s ShapeKind) Dim() int {

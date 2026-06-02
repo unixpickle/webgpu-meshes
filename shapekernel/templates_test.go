@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-func TestTemplateFormatsFloatLiterals(t *testing.T) {
-	got := Template("{{.Int32}} {{.Int64}} {{.Frac}} {{.Exp}} {{.NegZero}}",
+func TestWGSLFormatsFloatLiterals(t *testing.T) {
+	got := WGSL("{{.Int32}} {{.Int64}} {{.Frac}} {{.Exp}} {{.NegZero}}",
 		"Int32", float32(1),
 		"Int64", float64(2),
 		"Frac", float32(1.25),
