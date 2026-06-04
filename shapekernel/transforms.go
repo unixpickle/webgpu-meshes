@@ -8,8 +8,8 @@ func unitAxis2D(axis Vec2) Vec2 {
 		panic("expected a non-zero axis")
 	}
 	return Vec2{
-		float32(float64(axis[0]) / axisNorm),
-		float32(float64(axis[1]) / axisNorm),
+		float64(axis[0]) / axisNorm,
+		float64(axis[1]) / axisNorm,
 	}
 }
 
@@ -19,9 +19,9 @@ func unitAxis3D(axis Vec3) Vec3 {
 		panic("expected a non-zero axis")
 	}
 	return Vec3{
-		float32(float64(axis[0]) / axisNorm),
-		float32(float64(axis[1]) / axisNorm),
-		float32(float64(axis[2]) / axisNorm),
+		float64(axis[0]) / axisNorm,
+		float64(axis[1]) / axisNorm,
+		float64(axis[2]) / axisNorm,
 	}
 }
 
@@ -48,141 +48,164 @@ func absScaleFactor(kind ShapeKind, scales Vector) float64 {
 	return abs0
 }
 
-func Rotate2D(k ShapeKernel, angle float32) ShapeKernel {
+func Rotate2D(n Numerics, k ShapeKernel, angle float32) ShapeKernel {
 	if k.Kind == FalloffFunc || k.Kind.Dim() != 2 {
 		panic("Rotate2D requires a 2D non-falloff kernel")
 	}
 	fnName := genFunctionID(&k.IDs, "rotate2d")
 	AppendWGSL(&k, `
-			fn {{.Entrypoint}}(p: vec2<f32>) -> {{.ReturnType}} {
+			fn {{.Entrypoint}}(pRaw: {{.ArgType}}) -> {{.ReturnType}} {
+				let p = {{.N.AsFloat2}}(pRaw);
 				let cosA = cos({{.Angle}});
 				let sinA = sin({{.Angle}});
 				let newP = vec2<f32>(
 					cosA * p.x + sinA * p.y,
 					-sinA * p.x + cosA * p.y
 				);
-				return {{.Inner}}(newP);
+				return {{.Inner}}({{.N.Make2}}({{.N.FromFloat}}(newP.x), {{.N.FromFloat}}(newP.y)));
 			}
-		`, "Entrypoint", fnName, "ReturnType", k.Kind.ReturnType(), "Angle", angle, "Inner", k.EntrypointName)
+		`, "N", n.Symbols, "Entrypoint", fnName, "ArgType", k.Kind.ArgType(n), "ReturnType", k.Kind.ReturnType(n), "Angle", angle, "Inner", k.EntrypointName)
 	k.EntrypointName = fnName
 	return k
 }
 
-func Rotate3D(k ShapeKernel, axis Vec3, angle float32) ShapeKernel {
+func Rotate3D(n Numerics, k ShapeKernel, axis Vec3, angle float32) ShapeKernel {
 	if k.Kind == FalloffFunc || k.Kind.Dim() != 3 {
 		panic("Rotate3D requires a 3D non-falloff kernel")
 	}
 	unitAxis := unitAxis3D(axis)
 	fnName := genFunctionID(&k.IDs, "rotate3d")
 	AppendWGSL(&k, `
-			fn {{.Entrypoint}}(p: vec3<f32>) -> {{.ReturnType}} {
-				let axis = {{.Axis}};
+			fn {{.Entrypoint}}(pRaw: {{.ArgType}}) -> {{.ReturnType}} {
+				let p = {{.N.AsFloat3}}(pRaw);
+				let axis = {{.N.AsFloat3}}({{.Axis}});
 				let cosA = cos({{.Angle}});
 				let sinA = sin({{.Angle}});
 				let newP = p * cosA - cross(axis, p) * sinA + axis * dot(axis, p) * (1.0 - cosA);
-				return {{.Inner}}(newP);
+				return {{.Inner}}({{.N.Make3}}({{.N.FromFloat}}(newP.x), {{.N.FromFloat}}(newP.y), {{.N.FromFloat}}(newP.z)));
 			}
-		`, "Entrypoint", fnName, "ReturnType", k.Kind.ReturnType(), "Axis", unitAxis.WebGPUVec(), "Angle", angle, "Inner", k.EntrypointName)
+		`, "N", n.Symbols, "Entrypoint", fnName, "ArgType", k.Kind.ArgType(n), "ReturnType", k.Kind.ReturnType(n), "Axis", unitAxis.WebGPUVec(n), "Angle", angle, "Inner", k.EntrypointName)
 	k.EntrypointName = fnName
 	return k
 }
 
-func Mirror2D(k ShapeKernel, axis Vec2) ShapeKernel {
+func Mirror2D(n Numerics, k ShapeKernel, axis Vec2) ShapeKernel {
 	if k.Kind == FalloffFunc || k.Kind.Dim() != 2 {
 		panic("Mirror2D requires a 2D non-falloff kernel")
 	}
 	unitAxis := unitAxis2D(axis)
 	fnName := genFunctionID(&k.IDs, "mirror2d")
 	AppendWGSL(&k, `
-			fn {{.Entrypoint}}(p: vec2<f32>) -> {{.ReturnType}} {
-				let axis = {{.Axis}};
+			fn {{.Entrypoint}}(pRaw: {{.ArgType}}) -> {{.ReturnType}} {
+				let p = {{.N.AsFloat2}}(pRaw);
+				let axis = {{.N.AsFloat2}}({{.Axis}});
 				let newP = p - 2.0 * dot(axis, p) * axis;
-				return {{.Inner}}(newP);
+				return {{.Inner}}({{.N.Make2}}({{.N.FromFloat}}(newP.x), {{.N.FromFloat}}(newP.y)));
 			}
-		`, "Entrypoint", fnName, "ReturnType", k.Kind.ReturnType(), "Axis", unitAxis.WebGPUVec(), "Inner", k.EntrypointName)
+		`, "N", n.Symbols, "Entrypoint", fnName, "ArgType", k.Kind.ArgType(n), "ReturnType", k.Kind.ReturnType(n), "Axis", unitAxis.WebGPUVec(n), "Inner", k.EntrypointName)
 	k.EntrypointName = fnName
 	return k
 }
 
-func Mirror3D(k ShapeKernel, axis Vec3) ShapeKernel {
+func Mirror3D(n Numerics, k ShapeKernel, axis Vec3) ShapeKernel {
 	if k.Kind == FalloffFunc || k.Kind.Dim() != 3 {
 		panic("Mirror3D requires a 3D non-falloff kernel")
 	}
 	unitAxis := unitAxis3D(axis)
 	fnName := genFunctionID(&k.IDs, "mirror3d")
 	AppendWGSL(&k, `
-			fn {{.Entrypoint}}(p: vec3<f32>) -> {{.ReturnType}} {
-				let axis = {{.Axis}};
+			fn {{.Entrypoint}}(pRaw: {{.ArgType}}) -> {{.ReturnType}} {
+				let p = {{.N.AsFloat3}}(pRaw);
+				let axis = {{.N.AsFloat3}}({{.Axis}});
 				let newP = p - 2.0 * dot(axis, p) * axis;
-				return {{.Inner}}(newP);
+				return {{.Inner}}({{.N.Make3}}({{.N.FromFloat}}(newP.x), {{.N.FromFloat}}(newP.y), {{.N.FromFloat}}(newP.z)));
 			}
-		`, "Entrypoint", fnName, "ReturnType", k.Kind.ReturnType(), "Axis", unitAxis.WebGPUVec(), "Inner", k.EntrypointName)
+		`, "N", n.Symbols, "Entrypoint", fnName, "ArgType", k.Kind.ArgType(n), "ReturnType", k.Kind.ReturnType(n), "Axis", unitAxis.WebGPUVec(n), "Inner", k.EntrypointName)
 	k.EntrypointName = fnName
 	return k
 }
 
-func Translate(k ShapeKernel, offset Vector) ShapeKernel {
+func Translate(n Numerics, k ShapeKernel, offset Vector) ShapeKernel {
 	if k.Kind == FalloffFunc {
 		panic("cannot translate falloff functions")
 	}
 	fnName := genFunctionID(&k.IDs, "translate")
-	AppendWGSL(&k, `
+	diffOp := n.Symbols.Sub2
+	if k.Kind.Dim() == 3 {
+		diffOp = n.Symbols.Sub3
+	}
+	AppendWGSL(
+		&k,
+		`
 			fn {{.Entrypoint}}(p: {{.ArgType}}) -> {{.ReturnType}} {
-				let newP = p - {{.Offset}};
+				let newP = {{.DiffOp}}(p, {{.Offset}});
 				return {{.Inner}}(newP);
-			}
-		`, "Entrypoint", fnName, "ArgType", k.Kind.ArgType(), "ReturnType", k.Kind.ReturnType(), "Offset", offset.WebGPUVec(), "Inner", k.EntrypointName)
-	k.EntrypointName = fnName
-	return k
-}
-
-// InsetSDF offsets an SDF inward by subtracting inset from its value.
-func InsetSDF(k ShapeKernel, inset float32) ShapeKernel {
-	return offsetSDF(k, -inset, "inset")
-}
-
-// OutsetSDF offsets an SDF outward by adding outset to its value.
-func OutsetSDF(k ShapeKernel, outset float32) ShapeKernel {
-	return offsetSDF(k, outset, "outset")
-}
-
-func Scale(k ShapeKernel, scales Vector) ShapeKernel {
-	if k.Kind == FalloffFunc {
-		panic("cannot scale falloff functions")
-	}
-	absScale := absScaleFactor(k.Kind, scales)
-	scaleCode := ""
-	if k.Kind == SDF2D || k.Kind == SDF3D {
-		scaleCode = WGSL(" * {{.AbsScale}}", "AbsScale", absScale)
-	}
-	fnName := genFunctionID(&k.IDs, "scale")
-	AppendWGSL(&k, `
-			fn {{.Entrypoint}}(p: {{.ArgType}}) -> {{.ReturnType}} {
-				let newP = p / {{.Scales}};
-				return {{.Inner}}(newP){{.ScaleCode}};
 			}
 		`,
 		"Entrypoint", fnName,
-		"ArgType", k.Kind.ArgType(),
-		"ReturnType", k.Kind.ReturnType(),
-		"Scales", scales.WebGPUVec(),
+		"ArgType", k.Kind.ArgType(n),
+		"ReturnType", k.Kind.ReturnType(n),
+		"Offset", offset.WebGPUVec(n),
 		"Inner", k.EntrypointName,
-		"ScaleCode", scaleCode,
+		"DiffOp", diffOp,
 	)
 	k.EntrypointName = fnName
 	return k
 }
 
-func offsetSDF(k ShapeKernel, offset float32, name string) ShapeKernel {
+// InsetSDF offsets an SDF inward by subtracting inset from its value.
+func InsetSDF(n Numerics, k ShapeKernel, inset float32) ShapeKernel {
+	return offsetSDF(n, k, -inset, "inset")
+}
+
+// OutsetSDF offsets an SDF outward by adding outset to its value.
+func OutsetSDF(n Numerics, k ShapeKernel, outset float32) ShapeKernel {
+	return offsetSDF(n, k, outset, "outset")
+}
+
+func Scale(n Numerics, k ShapeKernel, scales Vector) ShapeKernel {
+	if k.Kind == FalloffFunc {
+		panic("cannot scale falloff functions")
+	}
+	absScale := absScaleFactor(k.Kind, scales)
+	resultExpr := "inner"
+	if k.Kind == SDF2D || k.Kind == SDF3D {
+		resultExpr = WGSL("{{.N.Mul}}(inner, {{.AbsScale}})", "N", n.Symbols, "AbsScale", n.Literal(absScale))
+	}
+	divOp := n.Symbols.Div2
+	if k.Kind.Dim() == 3 {
+		divOp = n.Symbols.Div3
+	}
+	fnName := genFunctionID(&k.IDs, "scale")
+	AppendWGSL(&k, `
+			fn {{.Entrypoint}}(p: {{.ArgType}}) -> {{.ReturnType}} {
+				let newP = {{.DivOp}}(p, {{.Scales}});
+				let inner = {{.Inner}}(newP);
+				return {{.ResultExpr}};
+			}
+		`,
+		"Entrypoint", fnName,
+		"ArgType", k.Kind.ArgType(n),
+		"ReturnType", k.Kind.ReturnType(n),
+		"Scales", scales.WebGPUVec(n),
+		"Inner", k.EntrypointName,
+		"DivOp", divOp,
+		"ResultExpr", resultExpr,
+	)
+	k.EntrypointName = fnName
+	return k
+}
+
+func offsetSDF(n Numerics, k ShapeKernel, offset float32, name string) ShapeKernel {
 	if k.Kind != SDF2D && k.Kind != SDF3D {
 		panic("expected SDF kernel")
 	}
 	fnName := genFunctionID(&k.IDs, name+"_sdf")
 	AppendWGSL(&k, `
-			fn {{.Entrypoint}}(p: {{.ArgType}}) -> f32 {
-				return {{.Inner}}(p) + {{.Offset}};
+			fn {{.Entrypoint}}(p: {{.ArgType}}) -> {{.ReturnType}} {
+				return {{.N.Add}}({{.Inner}}(p), {{.Offset}});
 			}
-		`, "Entrypoint", fnName, "ArgType", k.Kind.ArgType(), "Inner", k.EntrypointName, "Offset", offset)
+		`, "N", n.Symbols, "Entrypoint", fnName, "ArgType", k.Kind.ArgType(n), "ReturnType", k.Kind.ReturnType(n), "Inner", k.EntrypointName, "Offset", n.Literal(float64(offset)))
 	k.EntrypointName = fnName
 	return k
 }

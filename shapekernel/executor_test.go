@@ -103,7 +103,7 @@ func ExecuteShapeKernel(t testing.TB, k ShapeKernel, inputs ...Vector) KernelExe
 
 	request := kernelExecutorRequest{
 		Dim:           k.Kind.Dim(),
-		ReturnType:    k.Kind.ReturnType(),
+		ReturnType:    k.Kind.ReturnType(NativeFloat32Numerics),
 		Code:          k.Code,
 		Entrypoint:    k.EntrypointName,
 		Buffers:       make([]kernelExecutorBuffer, len(k.Buffers)),
@@ -179,12 +179,12 @@ func marshalKernelInput(t testing.TB, wantDim int, input Vector) [4]float32 {
 		if wantDim != 2 {
 			t.Fatalf("kernel expects %dD inputs but got Vec2", wantDim)
 		}
-		return [4]float32{v[0], v[1], 0, 0}
+		return [4]float32{float32(v[0]), float32(v[1]), 0, 0}
 	case Vec3:
 		if wantDim != 3 {
 			t.Fatalf("kernel expects %dD inputs but got Vec3", wantDim)
 		}
-		return [4]float32{v[0], v[1], v[2], 0}
+		return [4]float32{float32(v[0]), float32(v[1]), float32(v[2]), 0}
 	default:
 		t.Fatalf("unsupported input vector type %T; use Vec2 or Vec3", input)
 		return [4]float32{}
@@ -261,4 +261,48 @@ func TestExecuteShapeKernelNonFiniteFloats(t *testing.T) {
 		float32(math.Inf(-1)),
 		float32(math.NaN()),
 	}, 0)
+}
+
+func kernelToNative(n Numerics, k ShapeKernel) ShapeKernel {
+	fnName := genFunctionID(&k.IDs, "to_native_f32")
+	outConvFn := "bool"
+	if k.Kind.ReturnType(NativeFloat32Numerics) == "f32" {
+		outConvFn = n.Symbols.AsFloat
+	}
+	if k.Kind.Dim() == 2 {
+		AppendWGSL(
+			&k,
+			`
+				fn {{.Entrypoint}}(p: {{.ArgType}}) -> {{.ReturnType}} {
+					return {{.OutConv}}({{.Inner}}({{.N.Make2}}({{.N.FromFloat}}(p.x), {{.N.FromFloat}}(p.y))));
+				}
+			`,
+			"N", n.Symbols,
+			"Entrypoint", fnName,
+			"ArgType", k.Kind.ArgType(NativeFloat32Numerics),
+			"ReturnType", k.Kind.ReturnType(NativeFloat32Numerics),
+			"Inner", k.EntrypointName,
+			"OutConv", outConvFn,
+		)
+	} else if k.Kind.Dim() == 3 {
+		AppendWGSL(
+			&k,
+			`
+				fn {{.Entrypoint}}(p: {{.ArgType}}) -> {{.ReturnType}} {
+					return {{.OutConv}}({{.Inner}}({{.N.Make3}}({{.N.FromFloat}}(p.x), {{.N.FromFloat}}(p.y), {{.N.FromFloat}}(p.z))));
+				}
+			`,
+			"N", n.Symbols,
+			"Entrypoint", fnName,
+			"ArgType", k.Kind.ArgType(NativeFloat32Numerics),
+			"ReturnType", k.Kind.ReturnType(NativeFloat32Numerics),
+			"Inner", k.EntrypointName,
+			"OutConv", outConvFn,
+		)
+	} else {
+		panic("unsupported dimension")
+	}
+	k.Code = n.Library + "\n" + k.Code
+	k.EntrypointName = fnName
+	return k
 }

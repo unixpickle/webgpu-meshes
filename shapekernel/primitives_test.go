@@ -86,8 +86,19 @@ func (s solidSDF3D) SDF(c model3d.Coord3D) float64 {
 	return s.sdf.SDF(c)
 }
 
-func testPrimitive2D(t *testing.T, shape primitive2D, solidKernel, sdfKernel ShapeKernel, boundaryEps, sdfEps float32) {
+func testPrimitive2D(
+	t *testing.T,
+	shape primitive2D,
+	n Numerics,
+	solidKernel ShapeKernel,
+	sdfKernel ShapeKernel,
+	boundaryEps float32,
+	sdfEps float32,
+) {
 	t.Helper()
+
+	solidKernel = kernelToNative(n, solidKernel)
+	sdfKernel = kernelToNative(n, sdfKernel)
 
 	rng := rand.New(rand.NewSource(0))
 	center := shape.Min().Mid(shape.Max())
@@ -97,7 +108,7 @@ func testPrimitive2D(t *testing.T, shape primitive2D, solidKernel, sdfKernel Sha
 	var sdfExpected []float32
 	for i := 0; i < primitiveTestSamples; i++ {
 		point := model2d.NewCoordRandNorm(rng).Mul(extent).Add(center)
-		sdfInputs = append(sdfInputs, Vec2{float32(point.X), float32(point.Y)})
+		sdfInputs = append(sdfInputs, Vec2{point.X, point.Y})
 		sdfExpected = append(sdfExpected, float32(shape.SDF(point)))
 	}
 
@@ -108,7 +119,7 @@ func testPrimitive2D(t *testing.T, shape primitive2D, solidKernel, sdfKernel Sha
 		if math.Abs(shape.SDF(point)) < float64(boundaryEps) {
 			continue
 		}
-		solidInputs = append(solidInputs, Vec2{float32(point.X), float32(point.Y)})
+		solidInputs = append(solidInputs, Vec2{point.X, point.Y})
 		solidExpected = append(solidExpected, shape.Contains(point))
 	}
 
@@ -123,27 +134,35 @@ func testPrimitive2D(t *testing.T, shape primitive2D, solidKernel, sdfKernel Sha
 	})
 }
 
-func testPrimitive2DSDF(t *testing.T, shape primitive2D, sdfKernel ShapeKernel, boundaryEps, sdfEps float32) {
+func testPrimitive2DSDF(
+	t *testing.T,
+	shape primitive2D,
+	n Numerics,
+	sdfKernel ShapeKernel,
+	boundaryEps float32,
+	sdfEps float32,
+) {
 	t.Helper()
-	testPrimitive2D(t, shape, SDFToSolid(sdfKernel), sdfKernel, boundaryEps, sdfEps)
+	testPrimitive2D(t, shape, n, SDFToSolid(n, sdfKernel), sdfKernel, boundaryEps, sdfEps)
 }
 
-func testPrimitive3D(t *testing.T, shape primitive3D, solidKernel, sdfKernel ShapeKernel, boundaryEps, sdfEps float32) {
+func testPrimitive3D(
+	t *testing.T,
+	shape primitive3D,
+	n Numerics,
+	solidKernel ShapeKernel,
+	sdfKernel ShapeKernel,
+	boundaryEps float32,
+	sdfEps float32,
+) {
 	t.Helper()
+
+	solidKernel = kernelToNative(n, solidKernel)
+	testSDFKernel3D(t, shape, n, sdfKernel, sdfEps)
 
 	rng := rand.New(rand.NewSource(0))
 	center := shape.Min().Mid(shape.Max())
 	extent := shape.Max().Sub(shape.Min()).Scale(0.65)
-
-	var sdfInputs []Vector
-	var sdfExpected []float32
-	for i := 0; i < primitiveTestSamples; i++ {
-		point := model3d.NewCoord3DRandNorm(rng).Mul(extent).Add(center)
-		sdfInputs = append(sdfInputs, Vec3{float32(point.X), float32(point.Y), float32(point.Z)})
-		sdfExpected = append(sdfExpected, float32(shape.SDF(point)))
-	}
-	vals := ExecuteShapeKernel(t, sdfKernel, sdfInputs...)
-	vals.ExpectFloats(t, sdfExpected, sdfEps)
 
 	var solidInputs []Vector
 	var solidExpected []bool
@@ -152,20 +171,89 @@ func testPrimitive3D(t *testing.T, shape primitive3D, solidKernel, sdfKernel Sha
 		if math.Abs(shape.SDF(point)) < float64(boundaryEps) {
 			continue
 		}
-		solidInputs = append(solidInputs, Vec3{float32(point.X), float32(point.Y), float32(point.Z)})
+		solidInputs = append(solidInputs, Vec3{point.X, point.Y, point.Z})
 		solidExpected = append(solidExpected, shape.Contains(point))
 	}
-	vals = ExecuteShapeKernel(t, solidKernel, solidInputs...)
+	vals := ExecuteShapeKernel(t, solidKernel, solidInputs...)
 	vals.ExpectBools(t, solidExpected)
 }
 
-func testPrimitive3DSDF(t *testing.T, shape primitive3D, sdfKernel ShapeKernel, boundaryEps, sdfEps float32) {
+func testPrimitive3DSDF(t *testing.T, shape primitive3D, n Numerics, sdfKernel ShapeKernel, boundaryEps, sdfEps float32) {
 	t.Helper()
-	testPrimitive3D(t, shape, SDFToSolid(sdfKernel), sdfKernel, boundaryEps, sdfEps)
+	testPrimitive3D(t, shape, n, SDFToSolid(n, sdfKernel), sdfKernel, boundaryEps, sdfEps)
 }
 
-func testSolidKernel3D(t *testing.T, shape model3d.Solid, kernel ShapeKernel, boundaryDistance func(model3d.Coord3D) float64, boundaryEps float64) {
+func testSDFKernel3D(t *testing.T, referenceSDF model3d.SDF, n Numerics, kernel ShapeKernel, eps float32) {
 	t.Helper()
+
+	kernel = kernelToNative(n, kernel)
+
+	rng := rand.New(rand.NewSource(0))
+	center := referenceSDF.Min().Mid(referenceSDF.Max())
+	extent := referenceSDF.Max().Sub(referenceSDF.Min()).Scale(0.65)
+
+	var inputPoints []Vector
+	var expected []float32
+	for i := 0; i < primitiveTestSamples; i++ {
+		point := model3d.NewCoord3DRandNorm(rng).Mul(extent).Add(center)
+		inputPoints = append(inputPoints, Vec3{point.X, point.Y, point.Z})
+		expected = append(expected, float32(referenceSDF.SDF(point)))
+	}
+	vals := ExecuteShapeKernel(t, kernel, inputPoints...)
+	vals.ExpectFloats(t, expected, eps)
+}
+
+func testSolidKernel2D(
+	t *testing.T,
+	shape model2d.Solid,
+	n Numerics,
+	kernel ShapeKernel,
+	boundaryDistance func(model2d.Coord) float64,
+	boundaryEps float64,
+) {
+	t.Helper()
+
+	kernel = kernelToNative(n, kernel)
+
+	rng := rand.New(rand.NewSource(0))
+	center := shape.Min().Mid(shape.Max())
+	extent := shape.Max().Sub(shape.Min()).Scale(0.8)
+
+	var solidInputs []Vector
+	var solidExpected []bool
+	for len(solidInputs) < primitiveTestSamples {
+		point := model2d.NewCoordRandNorm(rng).Mul(extent).Add(center)
+		if boundaryDistance(point) < boundaryEps {
+			continue
+		}
+		solidInputs = append(solidInputs, Vec2{point.X, point.Y})
+		solidExpected = append(solidExpected, shape.Contains(point))
+	}
+	vals := ExecuteShapeKernel(t, kernel, solidInputs...)
+	vals.ExpectBools(t, solidExpected)
+}
+
+func testApproxSolid2D(t *testing.T, referenceSolid model2d.Solid, n Numerics, kernel ShapeKernel, meshDelta, boundaryEps float64) {
+	t.Helper()
+
+	referenceMesh := model2d.MarchingSquaresSearch(referenceSolid, meshDelta, 8)
+	referenceSDF := model2d.MeshToSDF(referenceMesh)
+	testSolidKernel2D(t, referenceSolid, n, kernel, func(point model2d.Coord) float64 {
+		return math.Abs(referenceSDF.SDF(point))
+	}, boundaryEps)
+}
+
+func testSolidKernel3D(
+	t *testing.T,
+	shape model3d.Solid,
+	n Numerics,
+	kernel ShapeKernel,
+	boundaryDistance func(model3d.Coord3D) float64,
+	boundaryEps float64,
+) {
+	t.Helper()
+
+	kernel = kernelToNative(n, kernel)
 
 	rng := rand.New(rand.NewSource(0))
 	center := shape.Min().Mid(shape.Max())
@@ -178,11 +266,21 @@ func testSolidKernel3D(t *testing.T, shape model3d.Solid, kernel ShapeKernel, bo
 		if boundaryDistance(point) < boundaryEps {
 			continue
 		}
-		solidInputs = append(solidInputs, Vec3{float32(point.X), float32(point.Y), float32(point.Z)})
+		solidInputs = append(solidInputs, Vec3{point.X, point.Y, point.Z})
 		solidExpected = append(solidExpected, shape.Contains(point))
 	}
 	vals := ExecuteShapeKernel(t, kernel, solidInputs...)
 	vals.ExpectBools(t, solidExpected)
+}
+
+func testApproxSolid3D(t *testing.T, referenceSolid model3d.Solid, n Numerics, kernel ShapeKernel, meshDelta, boundaryEps float64) {
+	t.Helper()
+
+	referenceMesh := model3d.DualContour(referenceSolid, meshDelta, false, false)
+	referenceSDF := model3d.MeshToSDF(referenceMesh)
+	testSolidKernel3D(t, referenceSolid, n, kernel, func(point model3d.Coord3D) float64 {
+		return math.Abs(referenceSDF.SDF(point))
+	}, boundaryEps)
 }
 
 func kernelSegments3(lines ...model3d.Segment) []Segment3 {
@@ -190,14 +288,14 @@ func kernelSegments3(lines ...model3d.Segment) []Segment3 {
 	for i, line := range lines {
 		result[i] = Segment3{
 			{
-				float32(line[0].X),
-				float32(line[0].Y),
-				float32(line[0].Z),
+				line[0].X,
+				line[0].Y,
+				line[0].Z,
 			},
 			{
-				float32(line[1].X),
-				float32(line[1].Y),
-				float32(line[1].Z),
+				line[1].X,
+				line[1].Y,
+				line[1].Z,
 			},
 		}
 	}
@@ -224,7 +322,7 @@ func l1LineJoinBoundaryDistance(point model3d.Coord3D, radius float64, lines []m
 func TestEmptySolid2D(t *testing.T) {
 	vals := ExecuteShapeKernel(
 		t,
-		Empty(Solid2D),
+		kernelToNative(SmokeFloat32Numerics, Empty(SmokeFloat32Numerics, Solid2D)),
 		Vec2{0, 0},
 		Vec2{1, -1},
 		Vec2{-2, 3},
@@ -235,7 +333,7 @@ func TestEmptySolid2D(t *testing.T) {
 func TestEmptySolid3D(t *testing.T) {
 	vals := ExecuteShapeKernel(
 		t,
-		Empty(Solid3D),
+		kernelToNative(SmokeFloat32Numerics, Empty(SmokeFloat32Numerics, Solid3D)),
 		Vec3{0, 0, 0},
 		Vec3{1, -1, 2},
 		Vec3{-2, 3, 4},
@@ -245,7 +343,7 @@ func TestEmptySolid3D(t *testing.T) {
 
 func TestEmptySDF(t *testing.T) {
 	for _, kind := range []ShapeKind{SDF2D, SDF3D} {
-		k := Empty(kind)
+		k := Empty(SmokeFloat32Numerics, kind)
 		if k.Kind != kind {
 			t.Fatalf("expected kind %v but got %v", kind, k.Kind)
 		}
@@ -258,7 +356,7 @@ func TestEmptySDF(t *testing.T) {
 		default:
 			t.Fatalf("unexpected kind %v", kind)
 		}
-		vals := ExecuteShapeKernel(t, k, inputs...)
+		vals := ExecuteShapeKernel(t, kernelToNative(SmokeFloat32Numerics, k), inputs...)
 		for _, f := range vals.Floats {
 			if !math.IsInf(float64(f), -1) {
 				t.Fatalf("expected -Inf outputs but got %v", vals.Floats)
@@ -270,7 +368,7 @@ func TestEmptySDF(t *testing.T) {
 func TestEmptySDFToSolid(t *testing.T) {
 	vals2D := ExecuteShapeKernel(
 		t,
-		SDFToSolid(Empty(SDF2D)),
+		kernelToNative(SmokeFloat32Numerics, SDFToSolid(SmokeFloat32Numerics, Empty(SmokeFloat32Numerics, SDF2D))),
 		Vec2{0, 0},
 		Vec2{1, -1},
 	)
@@ -278,7 +376,7 @@ func TestEmptySDFToSolid(t *testing.T) {
 
 	vals3D := ExecuteShapeKernel(
 		t,
-		SDFToSolid(Empty(SDF3D)),
+		kernelToNative(SmokeFloat32Numerics, SDFToSolid(SmokeFloat32Numerics, Empty(SmokeFloat32Numerics, SDF3D))),
 		Vec3{0, 0, 0},
 		Vec3{1, -1, 2},
 	)
@@ -291,13 +389,13 @@ func TestEmptyValidateKinds(t *testing.T) {
 			t.Fatal("expected panic for invalid empty kind")
 		}
 	}()
-	Empty(Metaball2D)
+	Empty(SmokeFloat32Numerics, Metaball2D)
 }
 
 func TestCirclePrimitive(t *testing.T) {
 	radius := float32(0.61)
 	shape := &model2d.Circle{Radius: float64(radius)}
-	testPrimitive2D(t, shape, CircleSolid(radius), CircleSDF(radius), 1e-4, 1e-4)
+	testPrimitive2D(t, shape, SmokeFloat32Numerics, CircleSolid(SmokeFloat32Numerics, float64(radius)), CircleSDF(SmokeFloat32Numerics, float64(radius)), 1e-4, 1e-4)
 }
 
 func TestTeardrop2DPrimitive(t *testing.T) {
@@ -311,8 +409,9 @@ func TestTeardrop2DPrimitive(t *testing.T) {
 	testPrimitive2D(
 		t,
 		solidSDF2D{solid: shape, sdf: meshSDF},
-		Teardrop2DSolid(radius),
-		Mesh2DSDF(mesh),
+		SmokeFloat32Numerics,
+		Teardrop2DSolid(SmokeFloat32Numerics, float64(radius)),
+		Mesh2DSDF(SmokeFloat32Numerics, mesh),
 		0.03,
 		1e-4,
 	)
@@ -324,7 +423,7 @@ func TestRect2DPrimitive(t *testing.T) {
 		model2d.XY(-float64(sideLengths[0])/2, -float64(sideLengths[1])/2),
 		model2d.XY(float64(sideLengths[0])/2, float64(sideLengths[1])/2),
 	)
-	testPrimitive2D(t, shape, Rect2DSolid(sideLengths), Rect2DSDF(sideLengths), 1e-4, 1e-4)
+	testPrimitive2D(t, shape, SmokeFloat32Numerics, Rect2DSolid(SmokeFloat32Numerics, sideLengths), Rect2DSDF(SmokeFloat32Numerics, sideLengths), 1e-4, 1e-4)
 }
 
 func TestCapsule2DPrimitive(t *testing.T) {
@@ -336,13 +435,13 @@ func TestCapsule2DPrimitive(t *testing.T) {
 		P2:     model2d.XY(float64(p2[0]), float64(p2[1])),
 		Radius: float64(radius),
 	}
-	testPrimitive2D(t, shape, Capsule2DSolid(p1, p2, radius), Capsule2DSDF(p1, p2, radius), 1e-4, 1e-4)
+	testPrimitive2D(t, shape, SmokeFloat32Numerics, Capsule2DSolid(SmokeFloat32Numerics, p1, p2, float64(radius)), Capsule2DSDF(SmokeFloat32Numerics, p1, p2, float64(radius)), 1e-4, 1e-4)
 }
 
 func TestSpherePrimitive(t *testing.T) {
 	radius := float32(0.61)
 	shape := &model3d.Sphere{Radius: float64(radius)}
-	testPrimitive3D(t, shape, SphereSolid(radius), SphereSDF(radius), 1e-4, 1e-4)
+	testPrimitive3D(t, shape, SmokeFloat32Numerics, SphereSolid(SmokeFloat32Numerics, float64(radius)), SphereSDF(SmokeFloat32Numerics, float64(radius)), 1e-4, 1e-4)
 }
 
 func TestRect3DPrimitive(t *testing.T) {
@@ -351,7 +450,7 @@ func TestRect3DPrimitive(t *testing.T) {
 		model3d.XYZ(-float64(sideLengths[0])/2, -float64(sideLengths[1])/2, -float64(sideLengths[2])/2),
 		model3d.XYZ(float64(sideLengths[0])/2, float64(sideLengths[1])/2, float64(sideLengths[2])/2),
 	)
-	testPrimitive3D(t, shape, Rect3DSolid(sideLengths), Rect3DSDF(sideLengths), 1e-4, 1e-4)
+	testPrimitive3D(t, shape, SmokeFloat32Numerics, Rect3DSolid(SmokeFloat32Numerics, sideLengths), Rect3DSDF(SmokeFloat32Numerics, sideLengths), 1e-4, 1e-4)
 }
 
 func TestCapsule3DPrimitive(t *testing.T) {
@@ -363,7 +462,7 @@ func TestCapsule3DPrimitive(t *testing.T) {
 		P2:     model3d.XYZ(float64(p2[0]), float64(p2[1]), float64(p2[2])),
 		Radius: float64(radius),
 	}
-	testPrimitive3D(t, shape, Capsule3DSolid(p1, p2, radius), Capsule3DSDF(p1, p2, radius), 1e-4, 1e-4)
+	testPrimitive3D(t, shape, SmokeFloat32Numerics, Capsule3DSolid(SmokeFloat32Numerics, p1, p2, float64(radius)), Capsule3DSDF(SmokeFloat32Numerics, p1, p2, float64(radius)), 1e-4, 1e-4)
 }
 
 func TestCylinderPrimitive(t *testing.T) {
@@ -375,7 +474,7 @@ func TestCylinderPrimitive(t *testing.T) {
 		P2:     model3d.XYZ(float64(p2[0]), float64(p2[1]), float64(p2[2])),
 		Radius: float64(radius),
 	}
-	testPrimitive3D(t, shape, CylinderSolid(p1, p2, radius), CylinderSDF(p1, p2, radius), 2e-4, 2e-4)
+	testPrimitive3D(t, shape, SmokeFloat32Numerics, CylinderSolid(SmokeFloat32Numerics, p1, p2, radius), CylinderSDF(SmokeFloat32Numerics, p1, p2, radius), 2e-4, 2e-4)
 }
 
 func TestLineJoinPrimitive(t *testing.T) {
@@ -398,7 +497,8 @@ func TestLineJoinPrimitive(t *testing.T) {
 	testSolidKernel3D(
 		t,
 		shape,
-		LineJoinSolid(float32(radius), kernelSegments3(lines...)...),
+		SmokeFloat32Numerics,
+		LineJoinSolid(SmokeFloat32Numerics, float32(radius), kernelSegments3(lines...)...),
 		func(point model3d.Coord3D) float64 {
 			return lineJoinBoundaryDistance(point, radius, lines)
 		},
@@ -426,7 +526,8 @@ func TestL1LineJoinPrimitive(t *testing.T) {
 	testSolidKernel3D(
 		t,
 		shape,
-		L1LineJoinSolid(float32(radius), kernelSegments3(lines...)...),
+		SmokeFloat32Numerics,
+		L1LineJoinSolid(SmokeFloat32Numerics, float32(radius), kernelSegments3(lines...)...),
 		func(point model3d.Coord3D) float64 {
 			return l1LineJoinBoundaryDistance(point, radius, lines)
 		},
@@ -443,7 +544,7 @@ func TestConePrimitive(t *testing.T) {
 		Base:   model3d.XYZ(float64(base[0]), float64(base[1]), float64(base[2])),
 		Radius: float64(radius),
 	}
-	testPrimitive3D(t, shape, ConeSolid(tip, base, radius), ConeSDF(tip, base, radius), 5e-4, 5e-4)
+	testPrimitive3D(t, shape, SmokeFloat32Numerics, ConeSolid(SmokeFloat32Numerics, tip, base, radius), ConeSDF(SmokeFloat32Numerics, tip, base, radius), 5e-4, 5e-4)
 }
 
 func TestConeSlicePrimitive(t *testing.T) {
@@ -457,5 +558,5 @@ func TestConeSlicePrimitive(t *testing.T) {
 		R1: float64(r1),
 		R2: float64(r2),
 	}
-	testPrimitive3D(t, shape, ConeSliceSolid(p1, p2, r1, r2), ConeSliceSDF(p1, p2, r1, r2), 5e-4, 5e-4)
+	testPrimitive3D(t, shape, SmokeFloat32Numerics, ConeSliceSolid(SmokeFloat32Numerics, p1, p2, r1, r2), ConeSliceSDF(SmokeFloat32Numerics, p1, p2, r1, r2), 5e-4, 5e-4)
 }

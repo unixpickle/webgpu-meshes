@@ -4,7 +4,7 @@ import "github.com/unixpickle/model3d/model3d"
 
 // Mesh3DSolid creates a solid using the even-odd rule to determine if points
 // are within a given triangle mesh.
-func Mesh3DSolid(m *model3d.Mesh) ShapeKernel {
+func Mesh3DSolid(n Numerics, m *model3d.Mesh) ShapeKernel {
 	bvh := newMesh3DBVH(m)
 	numNodes := len(bvh.NodeData) / 4
 
@@ -142,7 +142,8 @@ func Mesh3DSolid(m *model3d.Mesh) ShapeKernel {
 				return vec2<f32>(f32(numIntersections & 1u), minEdgeFraction);
 			}
 
-			fn {{.Entrypoint}}(p: vec3<f32>) -> bool {
+			fn {{.Entrypoint}}(p_raw: {{.N.Dtype3}}) -> bool {
+				let p = {{.N.AsFloat3}}(p_raw);
 				let first = {{.RayCast}}(p, vec3<f32>(0.5224892708603626, 0.10494477243214506, 0.43558938446126527));
 				let second = {{.RayCast}}(p, vec3<f32>(0.10494477243214506, 0.43558938446126527, 0.5224892708603626));
 				if (second.y > first.y) {
@@ -158,6 +159,7 @@ func Mesh3DSolid(m *model3d.Mesh) ShapeKernel {
 			"TriangleHit", triangleHitName,
 			"RayCast", rayCastName,
 			"Entrypoint", entrypointName,
+			"N", n.Symbols,
 			"NumNodes", numNodes,
 			"NodeData", nodeDataBufName,
 			"Triangles", triBufName,
@@ -168,9 +170,9 @@ func Mesh3DSolid(m *model3d.Mesh) ShapeKernel {
 
 // Mesh3DSDF creates an SDF by combining the triangle distance with the
 // inside/outside test from Mesh3DSolid.
-func Mesh3DSDF(m *model3d.Mesh) ShapeKernel {
+func Mesh3DSDF(n Numerics, m *model3d.Mesh) ShapeKernel {
 	bvh := newMesh3DBVH(m)
-	solidKernel := Mesh3DSolid(m)
+	solidKernel := Mesh3DSolid(n, m)
 	numNodes := len(solidKernel.Buffers[2].Constructor()) / 4
 	numTris := len(solidKernel.Buffers[0].Constructor()) / 9
 	queueSize := bvh.Height
@@ -284,11 +286,12 @@ func Mesh3DSDF(m *model3d.Mesh) ShapeKernel {
 				return abs(dot(ap, n)) / nLen;
 			}
 
-			fn {{.Entrypoint}}(p: vec3<f32>) -> f32 {
+			fn {{.Entrypoint}}(p_raw: {{.N.Dtype3}}) -> {{.N.Dtype}} {
+				let p = {{.N.AsFloat3}}(p_raw);
 				let numNodes = {{.NumNodes}}u;
 				let numTris = {{.NumTris}}u;
 				if (numNodes == 0u || numTris == 0u) {
-					return 0.0;
+					return {{.N.FromFloat}}(0.0);
 				}
 
 				var minDist = 1e30;
@@ -367,12 +370,13 @@ func Mesh3DSDF(m *model3d.Mesh) ShapeKernel {
 					hasCurrent = false;
 				}
 
-				if ({{.Solid}}(p)) {
-					return minDist;
+				let pSolid = {{.N.Make3}}({{.N.FromFloat}}(p.x), {{.N.FromFloat}}(p.y), {{.N.FromFloat}}(p.z));
+				if ({{.Solid}}(pSolid)) {
+					return {{.N.FromFloat}}(minDist);
 				}
-				return -minDist;
+				return {{.N.FromFloat}}(-minDist);
 			}
-		`,
+			`,
 			"NodeMin", nodeMinName,
 			"NodeBounds", nodeBoundsBufName,
 			"NodeMax", nodeMaxName,
@@ -380,6 +384,7 @@ func Mesh3DSDF(m *model3d.Mesh) ShapeKernel {
 			"SegmentDistance", segmentDistanceName,
 			"TriangleDistance", triangleDistanceName,
 			"Entrypoint", entrypointName,
+			"N", n.Symbols,
 			"NumNodes", numNodes,
 			"NumTris", numTris,
 			"QueueSize", queueSize,

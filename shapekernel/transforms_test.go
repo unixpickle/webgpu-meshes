@@ -20,8 +20,9 @@ func TestRotate2D(t *testing.T) {
 	testPrimitive2D(
 		t,
 		solidSDF2D{solid: referenceSolid, sdf: referenceSDF},
-		Rotate2D(Rect2DSolid(sideLengths), float32(angle)),
-		Rotate2D(Rect2DSDF(sideLengths), float32(angle)),
+		SmokeFloat32Numerics,
+		Rotate2D(SmokeFloat32Numerics, Rect2DSolid(SmokeFloat32Numerics, sideLengths), float32(angle)),
+		Rotate2D(SmokeFloat32Numerics, Rect2DSDF(SmokeFloat32Numerics, sideLengths), float32(angle)),
 		1e-4,
 		1e-4,
 	)
@@ -40,14 +41,15 @@ func TestRotate3D(t *testing.T) {
 	testPrimitive3D(
 		t,
 		solidSDF3D{solid: referenceSolid, sdf: referenceSDF},
-		Rotate3D(
-			Rect3DSolid(sideLengths),
-			Vec3{float32(axis.X), float32(axis.Y), float32(axis.Z)},
+		SmokeFloat32Numerics,
+		Rotate3D(SmokeFloat32Numerics,
+			Rect3DSolid(SmokeFloat32Numerics, sideLengths),
+			Vec3{axis.X, axis.Y, axis.Z},
 			float32(angle),
 		),
-		Rotate3D(
-			Rect3DSDF(sideLengths),
-			Vec3{float32(axis.X), float32(axis.Y), float32(axis.Z)},
+		Rotate3D(SmokeFloat32Numerics,
+			Rect3DSDF(SmokeFloat32Numerics, sideLengths),
+			Vec3{axis.X, axis.Y, axis.Z},
 			float32(angle),
 		),
 		1e-4,
@@ -73,13 +75,14 @@ func TestMirror2D(t *testing.T) {
 			solid: model2d.TransformSolid(transform, rect),
 			sdf:   model2d.TransformSDF(transform, rect),
 		},
-		Mirror2D(
-			Translate(Rect2DSolid(sideLengths), Vec2{float32(offset.X), float32(offset.Y)}),
-			Vec2{float32(axis.X), float32(axis.Y)},
+		SmokeFloat32Numerics,
+		Mirror2D(SmokeFloat32Numerics,
+			Translate(SmokeFloat32Numerics, Rect2DSolid(SmokeFloat32Numerics, sideLengths), Vec2{offset.X, offset.Y}),
+			Vec2{axis.X, axis.Y},
 		),
-		Mirror2D(
-			Translate(Rect2DSDF(sideLengths), Vec2{float32(offset.X), float32(offset.Y)}),
-			Vec2{float32(axis.X), float32(axis.Y)},
+		Mirror2D(SmokeFloat32Numerics,
+			Translate(SmokeFloat32Numerics, Rect2DSDF(SmokeFloat32Numerics, sideLengths), Vec2{offset.X, offset.Y}),
+			Vec2{axis.X, axis.Y},
 		),
 		1e-4,
 		1e-4,
@@ -104,13 +107,14 @@ func TestMirror3D(t *testing.T) {
 			solid: model3d.TransformSolid(transform, rect),
 			sdf:   model3d.TransformSDF(transform, rect),
 		},
-		Mirror3D(
-			Translate(Rect3DSolid(sideLengths), Vec3{float32(offset.X), float32(offset.Y), float32(offset.Z)}),
-			Vec3{float32(axis.X), float32(axis.Y), float32(axis.Z)},
+		SmokeFloat32Numerics,
+		Mirror3D(SmokeFloat32Numerics,
+			Translate(SmokeFloat32Numerics, Rect3DSolid(SmokeFloat32Numerics, sideLengths), Vec3{offset.X, offset.Y, offset.Z}),
+			Vec3{axis.X, axis.Y, axis.Z},
 		),
-		Mirror3D(
-			Translate(Rect3DSDF(sideLengths), Vec3{float32(offset.X), float32(offset.Y), float32(offset.Z)}),
-			Vec3{float32(axis.X), float32(axis.Y), float32(axis.Z)},
+		Mirror3D(SmokeFloat32Numerics,
+			Translate(SmokeFloat32Numerics, Rect3DSDF(SmokeFloat32Numerics, sideLengths), Vec3{offset.X, offset.Y, offset.Z}),
+			Vec3{axis.X, axis.Y, axis.Z},
 		),
 		1e-4,
 		1e-4,
@@ -135,13 +139,14 @@ func TestScale2D(t *testing.T) {
 	testPrimitive2D(
 		t,
 		solidSDF2D{solid: expectedSolid, sdf: expectedSDF},
-		Scale(
-			Translate(Rect2DSolid(sideLengths), Vec2{float32(offset.X), float32(offset.Y)}),
-			Vec2{float32(scale.X), float32(scale.Y)},
+		SmokeFloat32Numerics,
+		Scale(SmokeFloat32Numerics,
+			Translate(SmokeFloat32Numerics, Rect2DSolid(SmokeFloat32Numerics, sideLengths), Vec2{offset.X, offset.Y}),
+			Vec2{scale.X, scale.Y},
 		),
-		Scale(
-			Translate(Rect2DSDF(sideLengths), Vec2{float32(offset.X), float32(offset.Y)}),
-			Vec2{float32(scale.X), float32(scale.Y)},
+		Scale(SmokeFloat32Numerics,
+			Translate(SmokeFloat32Numerics, Rect2DSDF(SmokeFloat32Numerics, sideLengths), Vec2{offset.X, offset.Y}),
+			Vec2{scale.X, scale.Y},
 		),
 		1e-4,
 		1e-4,
@@ -166,13 +171,14 @@ func TestScale3D(t *testing.T) {
 	testPrimitive3D(
 		t,
 		solidSDF3D{solid: expectedSolid, sdf: expectedSDF},
-		Scale(
-			Translate(Rect3DSolid(sideLengths), Vec3{float32(offset.X), float32(offset.Y), float32(offset.Z)}),
-			Vec3{float32(scale.X), float32(scale.Y), float32(scale.Z)},
+		SmokeFloat32Numerics,
+		Scale(SmokeFloat32Numerics,
+			Translate(SmokeFloat32Numerics, Rect3DSolid(SmokeFloat32Numerics, sideLengths), Vec3{offset.X, offset.Y, offset.Z}),
+			Vec3{scale.X, scale.Y, scale.Z},
 		),
-		Scale(
-			Translate(Rect3DSDF(sideLengths), Vec3{float32(offset.X), float32(offset.Y), float32(offset.Z)}),
-			Vec3{float32(scale.X), float32(scale.Y), float32(scale.Z)},
+		Scale(SmokeFloat32Numerics,
+			Translate(SmokeFloat32Numerics, Rect3DSDF(SmokeFloat32Numerics, sideLengths), Vec3{offset.X, offset.Y, offset.Z}),
+			Vec3{scale.X, scale.Y, scale.Z},
 		),
 		1e-4,
 		1e-4,
@@ -185,5 +191,5 @@ func TestScaleSDFRequiresUniformAbs(t *testing.T) {
 			t.Fatal("expected panic for non-uniform SDF scale")
 		}
 	}()
-	Scale(Rect2DSDF(Vec2{0.7, 1.3}), Vec2{1.0, 2.0})
+	Scale(SmokeFloat32Numerics, Rect2DSDF(SmokeFloat32Numerics, Vec2{0.7, 1.3}), Vec2{1.0, 2.0})
 }

@@ -9,42 +9,42 @@ import (
 // Clip intersects a solid or SDF with an axis-aligned box.
 //
 // Bounds may use +/-Inf to leave one side unconstrained.
-func Clip(k ShapeKernel, minVec, maxVec Vector) ShapeKernel {
+func Clip(n Numerics, k ShapeKernel, minVec, maxVec Vector) ShapeKernel {
 	if minVec.Dim() != k.Kind.Dim() || maxVec.Dim() != k.Kind.Dim() {
 		panic("clip bounds dimension does not match kernel dimension")
 	}
 	switch k.Kind {
 	case Solid2D, Solid3D:
-		return clipSolid(k, minVec, maxVec)
+		return clipSolid(n, k, minVec, maxVec)
 	case SDF2D, SDF3D:
-		return clipSDF(k, minVec, maxVec)
+		return clipSDF(n, k, minVec, maxVec)
 	default:
 		panic("Clip requires a solid or SDF kernel")
 	}
 }
 
 // UnionSDFs takes the union of one or more SDFs using max().
-func UnionSDFs(sdfs []ShapeKernel) ShapeKernel {
-	return sdfBooleanOp(sdfs, "max", "union")
+func UnionSDFs(n Numerics, sdfs []ShapeKernel) ShapeKernel {
+	return sdfBooleanOp(n, sdfs, n.Symbols.Max, "union")
 }
 
 // IntersectSDFs takes the intersection of one or more SDFs using min().
-func IntersectSDFs(sdfs []ShapeKernel) ShapeKernel {
-	return sdfBooleanOp(sdfs, "min", "intersection")
+func IntersectSDFs(n Numerics, sdfs []ShapeKernel) ShapeKernel {
+	return sdfBooleanOp(n, sdfs, n.Symbols.Min, "intersection")
 }
 
 // UnionSolids takes the union of one or more solids.
-func UnionSolids(solids []ShapeKernel) ShapeKernel {
-	return solidBooleanOp(solids, "||", "union")
+func UnionSolids(n Numerics, solids []ShapeKernel) ShapeKernel {
+	return solidBooleanOp(n, solids, "||", "union")
 }
 
 // IntersectSolids takes the intersection of one or more solids.
-func IntersectSolids(solids []ShapeKernel) ShapeKernel {
-	return solidBooleanOp(solids, "&&", "intersection")
+func IntersectSolids(n Numerics, solids []ShapeKernel) ShapeKernel {
+	return solidBooleanOp(n, solids, "&&", "intersection")
 }
 
 // SubtractSolid subtracts negative from positive.
-func SubtractSolid(positive, negative ShapeKernel) ShapeKernel {
+func SubtractSolid(n Numerics, positive, negative ShapeKernel) ShapeKernel {
 	if positive.Kind != negative.Kind {
 		panic("mismatching shape kinds")
 	}
@@ -61,13 +61,13 @@ func SubtractSolid(positive, negative ShapeKernel) ShapeKernel {
 			fn {{.Entrypoint}}(p: {{.ArgType}}) -> bool {
 				return {{.Positive}}(p) && !{{.Negative}}(p);
 			}
-		`, "Entrypoint", fnName, "ArgType", k.Kind.ArgType(), "Positive", k.EntrypointName, "Negative", nextK.EntrypointName)
+		`, "Entrypoint", fnName, "ArgType", k.Kind.ArgType(n), "Positive", k.EntrypointName, "Negative", nextK.EntrypointName)
 	k.EntrypointName = fnName
 	return k
 }
 
 // SubtractSDF subtracts negative from positive using min(a, -b).
-func SubtractSDF(positive, negative ShapeKernel) ShapeKernel {
+func SubtractSDF(n Numerics, positive, negative ShapeKernel) ShapeKernel {
 	if positive.Kind != negative.Kind {
 		panic("mismatching shape kinds")
 	}
@@ -81,15 +81,15 @@ func SubtractSDF(positive, negative ShapeKernel) ShapeKernel {
 	k.Code += "\n" + nextK.Code
 	fnName := genFunctionID(&k.IDs, "subtract_sdf")
 	AppendWGSL(&k, `
-			fn {{.Entrypoint}}(p: {{.ArgType}}) -> f32 {
-				return min({{.Positive}}(p), -{{.Negative}}(p));
+			fn {{.Entrypoint}}(p: {{.ArgType}}) -> {{.ReturnType}} {
+				return {{.N.Min}}({{.Positive}}(p), {{.N.Sub}}({{.N.Zero}}, {{.Negative}}(p)));
 			}
-		`, "Entrypoint", fnName, "ArgType", k.Kind.ArgType(), "Positive", k.EntrypointName, "Negative", nextK.EntrypointName)
+		`, "N", n.Symbols, "Entrypoint", fnName, "ArgType", k.Kind.ArgType(n), "ReturnType", k.Kind.ReturnType(n), "Positive", k.EntrypointName, "Negative", nextK.EntrypointName)
 	k.EntrypointName = fnName
 	return k
 }
 
-func solidBooleanOp(solids []ShapeKernel, op, name string) ShapeKernel {
+func solidBooleanOp(n Numerics, solids []ShapeKernel, op, name string) ShapeKernel {
 	if len(solids) == 0 {
 		panic("expected at least one solid")
 	} else if len(solids) == 1 {
@@ -118,28 +118,33 @@ func solidBooleanOp(solids []ShapeKernel, op, name string) ShapeKernel {
 			fn {{.Entrypoint}}(p: {{.ArgType}}) -> bool {
 				return {{.Expr}};
 			}
-		`, "Entrypoint", fnName, "ArgType", k.Kind.ArgType(), "Expr", strings.Join(orCode, " "+op+" "))
+		`, "Entrypoint", fnName, "ArgType", k.Kind.ArgType(n), "Expr", strings.Join(orCode, " "+op+" "))
 	k.EntrypointName = fnName
 	return k
 }
 
-func clipSolid(k ShapeKernel, minVec, maxVec Vector) ShapeKernel {
-	conditions := clipConditions(k.Kind.Dim(), minVec, maxVec)
+func clipSolid(n Numerics, k ShapeKernel, minVec, maxVec Vector) ShapeKernel {
+	conditions := clipConditions(k.Kind.Dim(), minVec, maxVec, "pFloat")
 	if len(conditions) == 0 {
 		return k
 	}
 	fnName := genFunctionID(&k.IDs, "clip_solid")
+	asFloat := n.Symbols.AsFloat2
+	if k.Kind.Dim() == 3 {
+		asFloat = n.Symbols.AsFloat3
+	}
 	AppendWGSL(&k, `
 			fn {{.Entrypoint}}(p: {{.ArgType}}) -> bool {
+				let pFloat = {{.AsFloat}}(p);
 				return {{.Inner}}(p) && ({{.Conditions}});
 			}
-		`, "Entrypoint", fnName, "ArgType", k.Kind.ArgType(), "Inner", k.EntrypointName, "Conditions", strings.Join(conditions, " && "))
+		`, "Entrypoint", fnName, "ArgType", k.Kind.ArgType(n), "AsFloat", asFloat, "Inner", k.EntrypointName, "Conditions", strings.Join(conditions, " && "))
 	k.EntrypointName = fnName
 	return k
 }
 
-func clipSDF(k ShapeKernel, minVec, maxVec Vector) ShapeKernel {
-	clipFieldCode, clipFieldName, ok := clipFieldKernel(k.IDs, k.Kind, minVec, maxVec)
+func clipSDF(n Numerics, k ShapeKernel, minVec, maxVec Vector) ShapeKernel {
+	clipFieldCode, clipFieldName, ok := clipFieldKernel(n, k.IDs, k.Kind, minVec, maxVec)
 	if !ok {
 		return k
 	}
@@ -147,17 +152,17 @@ func clipSDF(k ShapeKernel, minVec, maxVec Vector) ShapeKernel {
 	k.Code += "\n" + clipFieldCode.Code
 	fnName := genFunctionID(&k.IDs, "clip_sdf")
 	AppendWGSL(&k, `
-			fn {{.Entrypoint}}(p: {{.ArgType}}) -> f32 {
-				return min({{.Inner}}(p), {{.ClipField}}(p));
+			fn {{.Entrypoint}}(p: {{.ArgType}}) -> {{.ReturnType}} {
+				return {{.N.Min}}({{.Inner}}(p), {{.ClipField}}(p));
 			}
-		`, "Entrypoint", fnName, "ArgType", k.Kind.ArgType(), "Inner", k.EntrypointName, "ClipField", clipFieldName)
+		`, "N", n.Symbols, "Entrypoint", fnName, "ArgType", k.Kind.ArgType(n), "ReturnType", k.Kind.ReturnType(n), "Inner", k.EntrypointName, "ClipField", clipFieldName)
 	k.EntrypointName = fnName
 	return k
 }
 
-func clipFieldKernel(ids IDTracker, kind ShapeKind, minVec, maxVec Vector) (ShapeKernel, string, bool) {
+func clipFieldKernel(n Numerics, ids IDTracker, kind ShapeKind, minVec, maxVec Vector) (ShapeKernel, string, bool) {
 	dim := kind.Dim()
-	conditions := clipConditions(dim, minVec, maxVec)
+	conditions := clipConditions(dim, minVec, maxVec, "p")
 	if len(conditions) == 0 {
 		return ShapeKernel{IDs: ids}, "", false
 	}
@@ -204,16 +209,20 @@ func clipFieldKernel(ids IDTracker, kind ShapeKind, minVec, maxVec Vector) (Shap
 		Kind: kind,
 		IDs:  ids,
 		Code: WGSL(`
-				fn {{.Entrypoint}}(p: {{.ArgType}}) -> f32 {
-					{{.OutsideLets}}
-					if ({{.Conditions}}) {
-						return {{.InsideExpr}};
+					fn {{.Entrypoint}}(pRaw: {{.ArgType}}) -> {{.ReturnType}} {
+						let p = {{.AsFloat}}(pRaw);
+						{{.OutsideLets}}
+						if ({{.Conditions}}) {
+							return {{.N.FromFloat}}({{.InsideExpr}});
+						}
+						return {{.N.FromFloat}}(-({{.OutsideExpr}}));
 					}
-					return -({{.OutsideExpr}});
-				}
-			`,
+				`,
+			"N", n.Symbols,
 			"Entrypoint", entrypointName,
-			"ArgType", kind.ArgType(),
+			"ArgType", kind.ArgType(n),
+			"ReturnType", kind.ReturnType(n),
+			"AsFloat", map[bool]string{true: n.Symbols.AsFloat3, false: n.Symbols.AsFloat2}[dim == 3],
 			"OutsideLets", strings.Join(outsideLets, "\n\t"),
 			"Conditions", strings.Join(conditions, " && "),
 			"InsideExpr", insideExpr,
@@ -223,7 +232,7 @@ func clipFieldKernel(ids IDTracker, kind ShapeKind, minVec, maxVec Vector) (Shap
 	}, entrypointName, true
 }
 
-func clipConditions(dim int, minVec, maxVec Vector) []string {
+func clipConditions(dim int, minVec, maxVec Vector, pointName string) []string {
 	var conditions []string
 	for i := 0; i < dim; i++ {
 		component := vectorComponentName(i)
@@ -232,10 +241,10 @@ func clipConditions(dim int, minVec, maxVec Vector) []string {
 			panic("invalid clip bounds")
 		}
 		if !math.IsInf(float64(minVal), -1) {
-			conditions = append(conditions, WGSL("p.{{.Component}} >= {{.Min}}", "Component", component, "Min", minVal))
+			conditions = append(conditions, WGSL("{{.Point}}.{{.Component}} >= {{.Min}}", "Point", pointName, "Component", component, "Min", minVal))
 		}
 		if !math.IsInf(float64(maxVal), 1) {
-			conditions = append(conditions, WGSL("p.{{.Component}} <= {{.Max}}", "Component", component, "Max", maxVal))
+			conditions = append(conditions, WGSL("{{.Point}}.{{.Component}} <= {{.Max}}", "Point", pointName, "Component", component, "Max", maxVal))
 		}
 	}
 	return conditions
@@ -247,7 +256,7 @@ func clipBoundsAt(minVec, maxVec Vector, i int) (float32, float32) {
 	if math.IsNaN(float64(minVal)) || math.IsNaN(float64(maxVal)) {
 		panic("clip bounds cannot be NaN")
 	}
-	return minVal, maxVal
+	return float32(minVal), float32(maxVal)
 }
 
 func vectorComponentName(i int) string {
@@ -263,7 +272,7 @@ func vectorComponentName(i int) string {
 	}
 }
 
-func sdfBooleanOp(sdfs []ShapeKernel, op, name string) ShapeKernel {
+func sdfBooleanOp(n Numerics, sdfs []ShapeKernel, op, name string) ShapeKernel {
 	if len(sdfs) == 0 {
 		panic("expected at least one SDF")
 	} else if len(sdfs) == 1 {
@@ -296,10 +305,10 @@ func sdfBooleanOp(sdfs []ShapeKernel, op, name string) ShapeKernel {
 		valueExpr = WGSL("{{.Op}}({{.Left}}, {{.Right}})", "Op", op, "Left", valueExpr, "Right", call)
 	}
 	AppendWGSL(&k, `
-			fn {{.Entrypoint}}(p: {{.ArgType}}) -> f32 {
+			fn {{.Entrypoint}}(p: {{.ArgType}}) -> {{.ReturnType}} {
 				return {{.Expr}};
 			}
-		`, "Entrypoint", fnName, "ArgType", k.Kind.ArgType(), "Expr", valueExpr)
+		`, "Entrypoint", fnName, "ArgType", k.Kind.ArgType(n), "ReturnType", k.Kind.ReturnType(n), "Expr", valueExpr)
 	k.EntrypointName = fnName
 	return k
 }

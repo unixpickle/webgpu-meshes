@@ -3,10 +3,10 @@ package shapekernel
 import "github.com/unixpickle/model3d/model2d"
 
 // ArcHullSolid creates a solid kernel for a convex hull of circular arcs.
-func ArcHullSolid(h *model2d.ArcHull) ShapeKernel {
+func ArcHullSolid(n Numerics, h *model2d.ArcHull) ShapeKernel {
 	startCenter := Vec2{}
 	if h != nil {
-		startCenter = Vec2{float32(h.StartCenter.X), float32(h.StartCenter.Y)}
+		startCenter = Vec2{h.StartCenter.X, h.StartCenter.Y}
 	}
 
 	arcData, segData := flattenArcHull(h)
@@ -104,14 +104,15 @@ func ArcHullSolid(h *model2d.ArcHull) ShapeKernel {
 				return best;
 			}
 
-			fn {{.Entrypoint}}(p: vec2<f32>) -> bool {
+			fn {{.Entrypoint}}(p_raw: {{.N.Dtype2}}) -> bool {
+				let p = {{.N.AsFloat2}}(p_raw);
 				let numArcs = {{.NumArcs}}u;
 				let numSegs = {{.NumSegs}}u;
 				if (numArcs == 0u && numSegs == 0u) {
 					return false;
 				}
 
-				let startCenter = {{.StartCenter}};
+				let startCenter = {{.N.AsFloat2}}({{.StartCenter}});
 				let dir = p - startCenter;
 				if (dot(dir, dir) <= 1e-12) {
 					return true;
@@ -142,9 +143,10 @@ func ArcHullSolid(h *model2d.ArcHull) ShapeKernel {
 			"SegmentRayScale", segmentRayScaleName,
 			"ArcRayScale", arcRayScaleName,
 			"Entrypoint", entrypointName,
+			"N", n.Symbols,
 			"NumArcs", len(arcData)/5,
 			"NumSegs", len(segData)/4,
-			"StartCenter", startCenter.WebGPUVec(),
+			"StartCenter", startCenter.WebGPUVec(n),
 			"ArcBuffer", arcBufName,
 			"SegBuffer", segBufName,
 		),
@@ -153,8 +155,8 @@ func ArcHullSolid(h *model2d.ArcHull) ShapeKernel {
 }
 
 // ArcHullSDF creates an SDF kernel for a convex hull of circular arcs.
-func ArcHullSDF(h *model2d.ArcHull) ShapeKernel {
-	solidKernel := ArcHullSolid(h)
+func ArcHullSDF(n Numerics, h *model2d.ArcHull) ShapeKernel {
+	solidKernel := ArcHullSolid(n, h)
 	arcBufName := solidKernel.Buffers[0].Name
 	segBufName := solidKernel.Buffers[1].Name
 	arcContainsName := genFunctionID(&solidKernel.IDs, "arc_contains_dist")
@@ -215,12 +217,13 @@ func ArcHullSDF(h *model2d.ArcHull) ShapeKernel {
 				return minDist;
 			}
 
-			fn {{.Entrypoint}}(p: vec2<f32>) -> f32 {
-				let numArcs = {{.NumArcs}}u;
-				let numSegs = {{.NumSegs}}u;
-				if (numArcs == 0u && numSegs == 0u) {
-					return 0.0;
-				}
+			fn {{.Entrypoint}}(p_raw: {{.N.Dtype2}}) -> {{.N.Dtype}} {
+				let p = {{.N.AsFloat2}}(p_raw);
+					let numArcs = {{.NumArcs}}u;
+					let numSegs = {{.NumSegs}}u;
+					if (numArcs == 0u && numSegs == 0u) {
+						return {{.N.FromFloat}}(0.0);
+					}
 
 					var minDist = 1e30;
 					for (var i = 0u; i < numArcs; i++) {
@@ -236,16 +239,18 @@ func ArcHullSDF(h *model2d.ArcHull) ShapeKernel {
 						minDist = min(minDist, {{.SegmentDistance}}(p, p1, p2));
 					}
 
-				if ({{.Solid}}(p)) {
-					return minDist;
+				let pSolid = {{.N.Make2}}({{.N.FromFloat}}(p.x), {{.N.FromFloat}}(p.y));
+				if ({{.Solid}}(pSolid)) {
+					return {{.N.FromFloat}}(minDist);
 					}
-					return -minDist;
+					return {{.N.FromFloat}}(-minDist);
 				}
 				`,
 			"ArcContains", arcContainsName,
 			"SegmentDistance", segmentDistanceName,
 			"ArcDistance", arcDistanceName,
 			"Entrypoint", entrypointName,
+			"N", n.Symbols,
 			"NumArcs", arcCount,
 			"NumSegs", segCount,
 			"ArcBuffer", arcBufName,

@@ -1,6 +1,8 @@
 package shapekernel
 
-import "math"
+import (
+	"math"
+)
 
 const (
 	InsetExtrudeChamfer InsetFunction = "chamfer"
@@ -11,10 +13,10 @@ type InsetFunction string
 
 // LinearExtrudeSolid extends a 2D shape along the Z axis, optionally centered,
 // twisted, and scaled from bottom to top.
-func LinearExtrudeSolid(k ShapeKernel, height float32, center bool, twist float32, scale Vec2) ShapeKernel {
+func LinearExtrudeSolid(n Numerics, k ShapeKernel, height float32, center bool, twist float32, scale Vec2) ShapeKernel {
 	switch k.Kind {
 	case SDF2D:
-		k = SDFToSolid(k)
+		k = SDFToSolid(n, k)
 	case Solid2D:
 	default:
 		panic("expected 2D solid or SDF kernel")
@@ -26,37 +28,38 @@ func LinearExtrudeSolid(k ShapeKernel, height float32, center bool, twist float3
 	z0, z1 := linearExtrudeZBounds(height, center)
 	fnName := genFunctionID(&k.IDs, "linear_extrude")
 	AppendWGSL(&k, `
-			fn {{.Entrypoint}}(p: vec3<f32>) -> bool {
-				if (p.z < {{.ZMin}} || p.z > {{.ZMax}}) {
+			fn {{.Entrypoint}}(p: {{.N.Dtype3}}) -> bool {
+				if ({{.N.Lt}}({{.N.Get3Z}}(p), {{.ZMin}}) || {{.N.Gt}}({{.N.Get3Z}}(p), {{.ZMax}})) {
 					return false;
 				}
 
-				var t = 0.0;
-				if ({{.Height}} > 0.0) {
-					t = (p.z - {{.ZMin}}) / {{.Height}};
+				var t = {{.N.Zero}};
+				if ({{.N.Gt}}({{.Height}}, {{.N.Zero}})) {
+					t = {{.N.Div}}({{.N.Sub}}({{.N.Get3Z}}(p), {{.ZMin}}), {{.Height}});
 				}
 
-				let sx = 1.0 + t * ({{.ScaleX}} - 1.0);
-				let sy = 1.0 + t * ({{.ScaleY}} - 1.0);
-				if (sx == 0.0 || sy == 0.0) {
+				let sx = {{.N.Add}}({{.N.One}}, {{.N.Mul}}(t, {{.N.Sub}}({{.ScaleX}}, {{.N.One}})));
+				let sy = {{.N.Add}}({{.N.One}}, {{.N.Mul}}(t, {{.N.Sub}}({{.ScaleY}}, {{.N.One}})));
+				if ({{.N.Eq}}(sx, {{.N.Zero}}) || {{.N.Eq}}(sy, {{.N.Zero}})) {
 					return false;
 				}
 
-				let angle = {{.Twist}} * t;
-				let cosA = cos(angle);
-				let sinA = sin(angle);
-				let rx = p.x * cosA - p.y * sinA;
-				let ry = p.x * sinA + p.y * cosA;
-				return {{.Inner}}(vec2<f32>(rx / sx, ry / sy));
+				let angle = {{.N.Mul}}({{.Twist}}, t);
+				let cosA = {{.N.Cos}}(angle);
+				let sinA = {{.N.Sin}}(angle);
+				let rx = {{.N.Sub}}({{.N.Mul}}({{.N.Get3X}}(p), cosA), {{.N.Mul}}({{.N.Get3Y}}(p), sinA));
+				let ry = {{.N.Add}}({{.N.Mul}}({{.N.Get3X}}(p), sinA), {{.N.Mul}}({{.N.Get3Y}}(p), cosA));
+				return {{.Inner}}({{.N.Make2}}({{.N.Div}}(rx, sx), {{.N.Div}}(ry, sy)));
 			}
 		`,
+		"N", n.Symbols,
 		"Entrypoint", fnName,
-		"ZMin", z0,
-		"ZMax", z1,
-		"Height", height,
-		"ScaleX", scale[0],
-		"ScaleY", scale[1],
-		"Twist", twist,
+		"ZMin", n.Literal(float64(z0)),
+		"ZMax", n.Literal(float64(z1)),
+		"Height", n.Literal(float64(height)),
+		"ScaleX", n.Literal(scale[0]),
+		"ScaleY", n.Literal(scale[1]),
+		"Twist", n.Literal(float64(twist)),
 		"Inner", k.EntrypointName,
 	)
 	k.Kind = Solid3D
@@ -66,7 +69,7 @@ func LinearExtrudeSolid(k ShapeKernel, height float32, center bool, twist float3
 
 // LinearExtrudeSDF turns a 2D SDF into a 3D SDF by extruding it along the Z
 // axis with a height and optional centering.
-func LinearExtrudeSDF(k ShapeKernel, height float32, center bool) ShapeKernel {
+func LinearExtrudeSDF(n Numerics, k ShapeKernel, height float32, center bool) ShapeKernel {
 	if k.Kind != SDF2D {
 		panic("expected 2D SDF kernel")
 	}
@@ -76,24 +79,26 @@ func LinearExtrudeSDF(k ShapeKernel, height float32, center bool) ShapeKernel {
 	z0, z1 := linearExtrudeZBounds(height, center)
 	fnName := genFunctionID(&k.IDs, "linear_extrude_sdf")
 	AppendWGSL(&k, `
-			fn {{.Entrypoint}}(p: vec3<f32>) -> f32 {
-				let sdf2d = {{.Inner}}(p.xy);
+			fn {{.Entrypoint}}(pRaw: {{.N.Dtype3}}) -> {{.N.Dtype}} {
+				let p = {{.N.AsFloat3}}(pRaw);
+				let p2d = {{.N.Make2}}({{.N.FromFloat}}(p.x), {{.N.FromFloat}}(p.y));
+				let sdf2d = {{.N.AsFloat}}({{.Inner}}(p2d));
 				let zDist = min(abs(p.z - {{.ZMin}}), abs(p.z - {{.ZMax}}));
 				let insideZ = p.z >= {{.ZMin}} && p.z <= {{.ZMax}};
 				if (!insideZ) {
 					if (sdf2d > 0.0) {
-						return -zDist;
+						return {{.N.FromFloat}}(-zDist);
 					} else {
-						return -sqrt(zDist * zDist + sdf2d * sdf2d);
+						return {{.N.FromFloat}}(-sqrt(zDist * zDist + sdf2d * sdf2d));
 					}
 				}
 				if (sdf2d > 0.0) {
-					return min(sdf2d, zDist);
+					return {{.N.FromFloat}}(min(sdf2d, zDist));
 				} else {
-					return sdf2d;
+					return {{.N.FromFloat}}(sdf2d);
 				}
 			}
-		`, "Entrypoint", fnName, "Inner", k.EntrypointName, "ZMin", z0, "ZMax", z1)
+		`, "N", n.Symbols, "Entrypoint", fnName, "Inner", k.EntrypointName, "ZMin", z0, "ZMax", z1)
 	k.Kind = SDF3D
 	k.EntrypointName = fnName
 	return k
@@ -102,35 +107,36 @@ func LinearExtrudeSDF(k ShapeKernel, height float32, center bool) ShapeKernel {
 // RevolveSDF revolves a 2D SDF around the Z axis, where the x-axis becomes the
 // radius axis and the y-axis becomes the z-axis. The left and right sides of
 // the 2D profile are unioned, matching model3d.RevolveSDF.
-func RevolveSDF(k ShapeKernel) ShapeKernel {
+func RevolveSDF(n Numerics, k ShapeKernel) ShapeKernel {
 	if k.Kind != SDF2D {
 		panic("expected 2D SDF kernel")
 	}
 	fnName := genFunctionID(&k.IDs, "revolve_sdf")
 	AppendWGSL(&k, `
-			fn {{.Entrypoint}}(p: vec3<f32>) -> f32 {
+			fn {{.Entrypoint}}(pRaw: {{.N.Dtype3}}) -> {{.N.Dtype}} {
+				let p = {{.N.AsFloat3}}(pRaw);
 				let r = length(p.xy);
-				let dPos = {{.Inner}}(vec2<f32>(r, p.z));
-				let dNeg = {{.Inner}}(vec2<f32>(-r, p.z));
-				return max(dPos, dNeg);
+				let dPos = {{.N.AsFloat}}({{.Inner}}({{.N.Make2}}({{.N.FromFloat}}(r), {{.N.FromFloat}}(p.z))));
+				let dNeg = {{.N.AsFloat}}({{.Inner}}({{.N.Make2}}({{.N.FromFloat}}(-r), {{.N.FromFloat}}(p.z))));
+				return {{.N.FromFloat}}(max(dPos, dNeg));
 			}
-		`, "Entrypoint", fnName, "Inner", k.EntrypointName)
+		`, "N", n.Symbols, "Entrypoint", fnName, "Inner", k.EntrypointName)
 	k.Kind = SDF3D
 	k.EntrypointName = fnName
 	return k
 }
 
 // RevolveSolid revolves a 2D shape fully around the Z axis.
-func RevolveSolid(k ShapeKernel) ShapeKernel {
-	return RevolveSolidRange(k, 2*math.Pi, 0)
+func RevolveSolid(n Numerics, k ShapeKernel) ShapeKernel {
+	return RevolveSolidRange(n, k, 2*math.Pi, 0)
 }
 
 // RevolveSolidRange revolves a 2D shape around the Z axis with a start angle
 // and total sweep in radians, matching model3d.RevolveSolidRange.
-func RevolveSolidRange(k ShapeKernel, angleRad float32, startRad float32) ShapeKernel {
+func RevolveSolidRange(n Numerics, k ShapeKernel, angleRad float32, startRad float32) ShapeKernel {
 	switch k.Kind {
 	case SDF2D:
-		k = SDFToSolid(k)
+		k = SDFToSolid(n, k)
 	case Solid2D:
 	default:
 		panic("expected 2D solid or SDF kernel")
@@ -150,7 +156,8 @@ func RevolveSolidRange(k ShapeKernel, angleRad float32, startRad float32) ShapeK
 
 	fnName := genFunctionID(&k.IDs, "revolve_solid_range")
 	AppendWGSL(&k, `
-			fn {{.Entrypoint}}(p: vec3<f32>) -> bool {
+			fn {{.Entrypoint}}(pRaw: {{.N.Dtype3}}) -> bool {
+				let p = {{.N.AsFloat3}}(pRaw);
 				let r = length(p.xy);
 				let angle = {{.Angle}};
 				let start = {{.Normalize}}({{.Start}});
@@ -171,9 +178,11 @@ func RevolveSolidRange(k ShapeKernel, angleRad float32, startRad float32) ShapeK
 					}
 				}
 
-				return {{.Inner}}(vec2<f32>(r, p.z)) || {{.Inner}}(vec2<f32>(-r, p.z));
+				return {{.Inner}}({{.N.Make2}}({{.N.FromFloat}}(r), {{.N.FromFloat}}(p.z))) ||
+					{{.Inner}}({{.N.Make2}}({{.N.FromFloat}}(-r), {{.N.FromFloat}}(p.z)));
 			}
 		`,
+		"N", n.Symbols,
 		"Entrypoint", fnName,
 		"Angle", angleRad,
 		"Normalize", normalizeName,
@@ -198,6 +207,7 @@ func linearExtrudeZBounds(height float32, center bool) (float32, float32) {
 // InsetExtrude turns a 2D SDF into a 3D solid with optional top and bottom
 // chamfer or fillet insets/outsets.
 func InsetExtrude(
+	n Numerics,
 	k ShapeKernel,
 	height float32,
 	center bool,
@@ -219,14 +229,17 @@ func InsetExtrude(
 
 	fnName := genFunctionID(&k.IDs, "inset_extrude")
 	AppendWGSL(&k, `
-			fn {{.Entrypoint}}(p: vec3<f32>) -> bool {
+			fn {{.Entrypoint}}(pRaw: {{.N.Dtype3}}) -> bool {
+				let p = {{.N.AsFloat3}}(pRaw);
 				if (p.z < {{.ZMin}} || p.z > {{.ZMax}}) {
 					return false;
 				}
 				let inset = {{.BottomInset}}(p.z) + {{.TopInset}}(p.z);
-				return {{.Inner}}(p.xy) > inset;
+				let p2d = {{.N.Make2}}({{.N.FromFloat}}(p.x), {{.N.FromFloat}}(p.y));
+				return {{.N.AsFloat}}({{.Inner}}(p2d)) > inset;
 			}
 		`,
+		"N", n.Symbols,
 		"Entrypoint", fnName,
 		"ZMin", z0,
 		"ZMax", z1,

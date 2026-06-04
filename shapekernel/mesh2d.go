@@ -4,7 +4,7 @@ import "github.com/unixpickle/model3d/model2d"
 
 // Mesh2DSolid creates a solid using the even-odd rule to determine if points
 // are within a given segment mesh.
-func Mesh2DSolid(m2 *model2d.Mesh) ShapeKernel {
+func Mesh2DSolid(n Numerics, m2 *model2d.Mesh) ShapeKernel {
 	bvh := newMesh2DBVH(m2)
 	numNodes := len(bvh.NodeData) / 4
 
@@ -138,7 +138,8 @@ func Mesh2DSolid(m2 *model2d.Mesh) ShapeKernel {
 				return vec2<f32>(f32(numIntersections & 1u), minEdgeFraction);
 			}
 
-			fn {{.Entrypoint}}(p: vec2<f32>) -> bool {
+			fn {{.Entrypoint}}(p_raw: {{.N.Dtype2}}) -> bool {
+				let p = {{.N.AsFloat2}}(p_raw);
 				let first = {{.RayCast}}(p, vec2<f32>(0.5224892708603626, 0.10494477243214506));
 				let second = {{.RayCast}}(p, vec2<f32>(0.10494477243214506, 0.5224892708603626));
 				if (second.y > first.y) {
@@ -154,6 +155,7 @@ func Mesh2DSolid(m2 *model2d.Mesh) ShapeKernel {
 			"SegmentHit", segmentHitName,
 			"RayCast", rayCastName,
 			"Entrypoint", entrypointName,
+			"N", n.Symbols,
 			"NumNodes", numNodes,
 			"NodeData", nodeDataBufName,
 			"Segments", segBufName,
@@ -164,9 +166,9 @@ func Mesh2DSolid(m2 *model2d.Mesh) ShapeKernel {
 
 // Mesh2DSDF creates an SDF by combining the segment distance with the
 // inside/outside test from Mesh2DSolid.
-func Mesh2DSDF(m2 *model2d.Mesh) ShapeKernel {
+func Mesh2DSDF(n Numerics, m2 *model2d.Mesh) ShapeKernel {
 	bvh := newMesh2DBVH(m2)
-	solidKernel := Mesh2DSolid(m2)
+	solidKernel := Mesh2DSolid(n, m2)
 	numNodes := len(bvh.NodeData) / 4
 	numSegs := len(bvh.Segments) / 4
 	queueSize := bvh.Height
@@ -225,11 +227,12 @@ func Mesh2DSDF(m2 *model2d.Mesh) ShapeKernel {
 				return distance(p, closest);
 			}
 
-			fn {{.Entrypoint}}(p: vec2<f32>) -> f32 {
+			fn {{.Entrypoint}}(p_raw: {{.N.Dtype2}}) -> {{.N.Dtype}} {
+				let p = {{.N.AsFloat2}}(p_raw);
 				let numNodes = {{.NumNodes}}u;
 				let numSegs = {{.NumSegments}}u;
 				if (numNodes == 0u || numSegs == 0u) {
-					return 0.0;
+					return {{.N.FromFloat}}(0.0);
 				}
 
 				var minDist = 1e30;
@@ -307,13 +310,15 @@ func Mesh2DSDF(m2 *model2d.Mesh) ShapeKernel {
 					hasCurrent = false;
 				}
 
-				if ({{.Solid}}(p)) {
-					return minDist;
+				let pSolid = {{.N.Make2}}({{.N.FromFloat}}(p.x), {{.N.FromFloat}}(p.y));
+				if ({{.Solid}}(pSolid)) {
+					return {{.N.FromFloat}}(minDist);
 				}
-				return -minDist;
+				return {{.N.FromFloat}}(-minDist);
 			}
-		`,
+			`,
 			"Entrypoint", entrypointName,
+			"N", n.Symbols,
 			"NodeMin", nodeMinName,
 			"NodeBounds", nodeBoundsBufName,
 			"NodeMax", nodeMaxName,

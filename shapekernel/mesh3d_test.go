@@ -27,12 +27,12 @@ func TestMesh3DSolid(t *testing.T) {
 	rng := rand.New(rand.NewSource(0))
 	mesh := testRandomMesh3D(rng)
 	meshSDF := model3d.MeshToSDF(mesh)
-	testPrimitive3D(t, solidSDF3DFromSDF(meshSDF), Mesh3DSolid(mesh), Mesh3DSDF(mesh), 0.02, 2e-4)
+	testPrimitive3D(t, solidSDF3DFromSDF(meshSDF), SmokeFloat32Numerics, Mesh3DSolid(SmokeFloat32Numerics, mesh), Mesh3DSDF(SmokeFloat32Numerics, mesh), 0.02, 2e-4)
 }
 
 func TestMesh3DSDF(t *testing.T) {
 	rng := rand.New(rand.NewSource(0))
 	mesh := testRandomMesh3D(rng)
 	meshSDF := model3d.MeshToSDF(mesh)
-	testPrimitive3DSDF(t, solidSDF3DFromSDF(meshSDF), Mesh3DSDF(mesh), 0.02, 2e-4)
+	testPrimitive3DSDF(t, solidSDF3DFromSDF(meshSDF), SmokeFloat32Numerics, Mesh3DSDF(SmokeFloat32Numerics, mesh), 0.02, 2e-4)
 }

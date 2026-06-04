@@ -23,5 +23,5 @@ func TestMesh2D(t *testing.T) {
 	rng := rand.New(rand.NewSource(0))
 	mesh := testRandomMesh2D(rng)
 	meshSDF := model2d.MeshToSDF(mesh)
-	testPrimitive2D(t, solidSDF2DFromSDF(meshSDF), Mesh2DSolid(mesh), Mesh2DSDF(mesh), 0.01, 1e-4)
+	testPrimitive2D(t, solidSDF2DFromSDF(meshSDF), SmokeFloat32Numerics, Mesh2DSolid(SmokeFloat32Numerics, mesh), Mesh2DSDF(SmokeFloat32Numerics, mesh), 0.01, 1e-4)
 }

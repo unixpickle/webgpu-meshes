@@ -1,8 +1,6 @@
 package shapekernel
 
-import "strings"
-
-func InversePowerMetaballFalloffFunc(power float32) ShapeKernel {
+func InversePowerMetaballFalloffFunc(n Numerics, power float32) ShapeKernel {
 	if power <= 0 {
 		panic("power must be positive")
 	}
@@ -12,74 +10,74 @@ func InversePowerMetaballFalloffFunc(power float32) ShapeKernel {
 		Kind: FalloffFunc,
 		IDs:  ids,
 		Code: WGSL(`
-				fn {{.Entrypoint}}(r: f32) -> f32 {
-					if (r <= 0.0) {
-						return 1e30;
+					fn {{.Entrypoint}}(r: {{.N.Dtype}}) -> {{.N.Dtype}} {
+						if ({{.N.Le}}(r, {{.N.Zero}})) {
+							return {{.Inf}};
+						}
+						return {{.N.Pow}}(r, {{.NegPower}});
 					}
-					return pow(r, -{{.Power}});
-				}
-			`, "Entrypoint", entrypointName, "Power", power),
+				`, "N", n.Symbols, "Entrypoint", entrypointName, "Inf", n.Literal(1e30), "NegPower", n.Literal(float64(-power))),
 		EntrypointName: entrypointName,
 	}
 }
 
-func LinearMetaballFalloffFunc() ShapeKernel {
-	return InversePowerMetaballFalloffFunc(1)
+func LinearMetaballFalloffFunc(n Numerics) ShapeKernel {
+	return InversePowerMetaballFalloffFunc(n, 1)
 }
 
-func QuadraticMetaballFalloffFunc() ShapeKernel {
-	return InversePowerMetaballFalloffFunc(2)
+func QuadraticMetaballFalloffFunc(n Numerics) ShapeKernel {
+	return InversePowerMetaballFalloffFunc(n, 2)
 }
 
-func CubicMetaballFalloffFunc() ShapeKernel {
-	return InversePowerMetaballFalloffFunc(3)
+func CubicMetaballFalloffFunc(n Numerics) ShapeKernel {
+	return InversePowerMetaballFalloffFunc(n, 3)
 }
 
-func QuarticMetaballFalloffFunc() ShapeKernel {
-	return InversePowerMetaballFalloffFunc(4)
+func QuarticMetaballFalloffFunc(n Numerics) ShapeKernel {
+	return InversePowerMetaballFalloffFunc(n, 4)
 }
 
-func QuinticMetaballFalloffFunc() ShapeKernel {
-	return InversePowerMetaballFalloffFunc(5)
+func QuinticMetaballFalloffFunc(n Numerics) ShapeKernel {
+	return InversePowerMetaballFalloffFunc(n, 5)
 }
 
-func ExponentialMetaballFalloffFunc() ShapeKernel {
+func ExponentialMetaballFalloffFunc(n Numerics) ShapeKernel {
 	ids := IDTracker{}
 	entrypointName := genFunctionID(&ids, "exponential_metaball_falloff")
 	return ShapeKernel{
 		Kind: FalloffFunc,
 		IDs:  ids,
 		Code: WGSL(`
-				fn {{.Entrypoint}}(r: f32) -> f32 {
-					if (r <= 0.0) {
-						return 1.0;
+					fn {{.Entrypoint}}(r: {{.N.Dtype}}) -> {{.N.Dtype}} {
+						if ({{.N.Le}}(r, {{.N.Zero}})) {
+							return {{.N.One}};
+						}
+						return {{.N.Exp}}({{.N.Sub}}({{.N.Zero}}, r));
 					}
-					return exp(-r);
-				}
-			`, "Entrypoint", entrypointName),
+				`, "N", n.Symbols, "Entrypoint", entrypointName),
 		EntrypointName: entrypointName,
 	}
 }
 
-func GaussianMetaballFalloffFunc() ShapeKernel {
+func GaussianMetaballFalloffFunc(n Numerics) ShapeKernel {
 	ids := IDTracker{}
 	entrypointName := genFunctionID(&ids, "gaussian_metaball_falloff")
 	return ShapeKernel{
 		Kind: FalloffFunc,
 		IDs:  ids,
 		Code: WGSL(`
-				fn {{.Entrypoint}}(r: f32) -> f32 {
-					if (r <= 0.0) {
-						return 1.0;
+					fn {{.Entrypoint}}(r: {{.N.Dtype}}) -> {{.N.Dtype}} {
+						if ({{.N.Le}}(r, {{.N.Zero}})) {
+							return {{.N.One}};
+						}
+						return {{.N.Exp}}({{.N.Sub}}({{.N.Zero}}, {{.N.Mul}}(r, r)));
 					}
-					return exp(-(r * r));
-				}
-			`, "Entrypoint", entrypointName),
+				`, "N", n.Symbols, "Entrypoint", entrypointName),
 		EntrypointName: entrypointName,
 	}
 }
 
-func WyvillMetaballFalloffFunc(d float32) ShapeKernel {
+func WyvillMetaballFalloffFunc(n Numerics, d float32) ShapeKernel {
 	if d <= 0 {
 		panic("d must be positive")
 	}
@@ -89,23 +87,23 @@ func WyvillMetaballFalloffFunc(d float32) ShapeKernel {
 		Kind: FalloffFunc,
 		IDs:  ids,
 		Code: WGSL(`
-				fn {{.Entrypoint}}(r: f32) -> f32 {
-					if (r < 0.0) {
-						return 1e30;
+					fn {{.Entrypoint}}(r: {{.N.Dtype}}) -> {{.N.Dtype}} {
+						if ({{.N.Lt}}(r, {{.N.Zero}})) {
+							return {{.Inf}};
+						}
+						if ({{.N.Ge}}(r, {{.Radius}})) {
+							return {{.N.Zero}};
+						}
+						let ratio2 = {{.N.Div}}({{.N.Mul}}(r, r), {{.N.Mul}}({{.Radius}}, {{.Radius}}));
+						let value = {{.N.Sub}}({{.N.One}}, ratio2);
+						return {{.N.Mul}}(value, value);
 					}
-					if (r >= {{.Radius}}) {
-						return 0.0;
-					}
-					let ratio2 = (r * r) / ({{.Radius}} * {{.Radius}});
-					let value = 1.0 - ratio2;
-					return value * value;
-				}
-			`, "Entrypoint", entrypointName, "Radius", d),
+				`, "N", n.Symbols, "Entrypoint", entrypointName, "Radius", n.Literal(float64(d)), "Inf", n.Literal(1e30)),
 		EntrypointName: entrypointName,
 	}
 }
 
-func SDFToMetaball(k ShapeKernel) ShapeKernel {
+func SDFToMetaball(n Numerics, k ShapeKernel) ShapeKernel {
 	var metaballKind ShapeKind
 	switch k.Kind {
 	case SDF2D:
@@ -118,24 +116,25 @@ func SDFToMetaball(k ShapeKernel) ShapeKernel {
 
 	fnName := genFunctionID(&k.IDs, "sdf_to_metaball")
 	AppendWGSL(&k, `
-			fn {{.Entrypoint}}(p: {{.ArgType}}) -> f32 {
-				return -{{.Inner}}(p);
+			fn {{.Entrypoint}}(p: {{.ArgType}}) -> {{.ReturnType}} {
+				return {{.N.Sub}}({{.N.Zero}}, {{.Inner}}(p));
 			}
-		`, "Entrypoint", fnName, "ArgType", k.Kind.ArgType(), "Inner", k.EntrypointName)
+		`, "N", n.Symbols, "Entrypoint", fnName, "ArgType", k.Kind.ArgType(n), "ReturnType", k.Kind.ReturnType(n), "Inner", k.EntrypointName)
 	k.Kind = metaballKind
 	k.EntrypointName = fnName
 	return k
 }
 
-func MetaballSolid(falloff ShapeKernel, radiusThreshold float32, metaballs ...ShapeKernel) ShapeKernel {
+func MetaballSolid(n Numerics, falloff ShapeKernel, radiusThreshold float32, metaballs ...ShapeKernel) ShapeKernel {
 	weights := make([]float32, len(metaballs))
 	for i := range weights {
 		weights[i] = 1
 	}
-	return WeightedMetaballSolid(falloff, radiusThreshold, metaballs, weights)
+	return WeightedMetaballSolid(n, falloff, radiusThreshold, metaballs, weights)
 }
 
 func WeightedMetaballSolid(
+	n Numerics,
 	falloff ShapeKernel,
 	radiusThreshold float32,
 	metaballs []ShapeKernel,
@@ -178,11 +177,16 @@ func WeightedMetaballSolid(
 	k.Code += "\n" + falloff.Code
 	sumCode := make([]string, len(metaballCalls))
 	for i, call := range metaballCalls {
-		sumCode[i] = WGSL("{{.Weight}} * {{.Falloff}}({{.Call}})",
-			"Weight", weights[i],
+		sumCode[i] = WGSL("{{.N.Mul}}({{.Weight}}, {{.Falloff}}({{.Call}}))",
+			"N", n.Symbols,
+			"Weight", n.Literal(float64(weights[i])),
 			"Falloff", falloff.EntrypointName,
 			"Call", call,
 		)
+	}
+	sumExpr := sumCode[0]
+	for _, term := range sumCode[1:] {
+		sumExpr = WGSL("{{.N.Add}}({{.Left}}, {{.Right}})", "N", n.Symbols, "Left", sumExpr, "Right", term)
 	}
 
 	solidKind := Solid2D
@@ -192,16 +196,17 @@ func WeightedMetaballSolid(
 	fnName := genFunctionID(&k.IDs, "metaball_solid")
 	AppendWGSL(&k, `
 			fn {{.Entrypoint}}(p: {{.ArgType}}) -> bool {
-				let threshold = {{.Falloff}}({{.RadiusThreshold}});
-				let sum = {{.SumExpr}};
-				return sum > threshold;
-			}
-		`,
+					let threshold = {{.Falloff}}({{.RadiusThreshold}});
+					let sum = {{.SumExpr}};
+					return {{.N.Gt}}(sum, threshold);
+				}
+			`,
 		"Entrypoint", fnName,
-		"ArgType", kind.ArgType(),
+		"ArgType", kind.ArgType(n),
+		"N", n.Symbols,
 		"Falloff", falloff.EntrypointName,
-		"RadiusThreshold", radiusThreshold,
-		"SumExpr", strings.Join(sumCode, " + "),
+		"RadiusThreshold", n.Literal(float64(radiusThreshold)),
+		"SumExpr", sumExpr,
 	)
 	k.Kind = solidKind
 	k.EntrypointName = fnName

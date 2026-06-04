@@ -24,21 +24,27 @@ const (
 	FalloffFunc
 )
 
-func (s ShapeKind) ReturnType() string {
+func (s ShapeKind) ReturnType(n Numerics) string {
 	switch s {
 	case Solid2D, Solid3D:
 		return "bool"
 	case SDF2D, SDF3D, Metaball2D, Metaball3D, FalloffFunc:
-		return "f32"
+		return n.Symbols.Dtype
 	}
 	panic("unknown ShapeKind")
 }
 
-func (s ShapeKind) ArgType() string {
+func (s ShapeKind) ArgType(n Numerics) string {
 	if s == FalloffFunc {
-		return "f32"
+		return n.Symbols.Dtype
 	}
-	return WGSL("vec{{.Dim}}<f32>", "Dim", s.Dim())
+	if s.Dim() == 2 {
+		return n.Symbols.Dtype2
+	} else if s.Dim() == 3 {
+		return n.Symbols.Dtype3
+	} else {
+		panic("no dtype for vec dimension")
+	}
 }
 
 func (s ShapeKind) Dim() int {

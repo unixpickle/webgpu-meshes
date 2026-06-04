@@ -10,12 +10,12 @@ import (
 
 func TestArcHullPrimitive(t *testing.T) {
 	shape := randomArcHullForTest()
-	testPrimitive2D(t, shape, ArcHullSolid(shape), ArcHullSDF(shape), 2e-4, 5e-4)
+	testPrimitive2D(t, shape, SmokeFloat32Numerics, ArcHullSolid(SmokeFloat32Numerics, shape), ArcHullSDF(SmokeFloat32Numerics, shape), 2e-4, 5e-4)
 }
 
 func TestArcHullSDF(t *testing.T) {
 	shape := randomArcHullForTest()
-	testPrimitive2DSDF(t, shape, ArcHullSDF(shape), 2e-4, 5e-4)
+	testPrimitive2DSDF(t, shape, SmokeFloat32Numerics, ArcHullSDF(SmokeFloat32Numerics, shape), 2e-4, 5e-4)
 }
 
 func randomArcHullForTest() *model2d.ArcHull {
