@@ -435,172 +435,168 @@ func Capsule3DSDF(n Numerics, p1, p2 Vec3, radius float64) ShapeKernel {
 	}
 }
 
-func CylinderSolid(n Numerics, p1, p2 Vec3, radius float32) ShapeKernel {
+func CylinderSolid(n Numerics, p1, p2 Vec3, radius float64) ShapeKernel {
 	ids := IDTracker{}
 	entrypointName := genFunctionID(&ids, "cylinder_solid")
 	return ShapeKernel{
 		Kind: Solid3D,
 		IDs:  ids,
 		Code: WGSL(`
-					fn {{.Entrypoint}}(pRaw: {{.N.Dtype3}}) -> bool {
-						let p = {{.N.AsFloat3}}(pRaw);
-						let a = {{.N.AsFloat3}}({{.P1}});
-						let b = {{.N.AsFloat3}}({{.P2}});
-						let ba = b - a;
-						let h = length(ba);
-						if (h <= 0.0) {
-						return distance(p, a) <= {{.Radius}};
+					fn {{.Entrypoint}}(p: {{.N.Dtype3}}) -> bool {
+						let a = {{.P1}};
+						let b = {{.P2}};
+						let ba = {{.N.Sub3}}(b, a);
+						let h = {{.N.Len3}}(ba);
+						if ({{.N.Le}}(h, {{.N.Zero}})) {
+							return {{.N.Le}}({{.N.Dist3}}(p, a), {{.Radius}});
+						}
+						let axis = {{.N.Scale3}}(ba, {{.N.Div}}({{.N.One}}, h));
+						let axial = {{.N.Dot3}}({{.N.Sub3}}(p, a), axis);
+						if ({{.N.Lt}}(axial, {{.N.Zero}}) || {{.N.Gt}}(axial, h)) {
+							return false;
+						}
+						let projection = {{.N.Add3}}(a, {{.N.Scale3}}(axis, axial));
+						return {{.N.Le}}({{.N.Dist3}}(p, projection), {{.Radius}});
 					}
-					let axis = ba / h;
-					let axial = dot(p - a, axis);
-					if (axial < 0.0 || axial > h) {
-						return false;
-					}
-						let projection = a + axis * axial;
-						return distance(p, projection) <= {{.Radius}};
-					}
-				`, "N", n.Symbols, "Entrypoint", entrypointName, "P1", p1.WebGPUVec(n), "P2", p2.WebGPUVec(n), "Radius", radius),
+				`, "N", n.Symbols, "Entrypoint", entrypointName, "P1", p1.WebGPUVec(n), "P2", p2.WebGPUVec(n), "Radius", n.Literal(radius)),
 		EntrypointName: entrypointName,
 	}
 }
 
-func CylinderSDF(n Numerics, p1, p2 Vec3, radius float32) ShapeKernel {
+func CylinderSDF(n Numerics, p1, p2 Vec3, radius float64) ShapeKernel {
 	return ConeSliceSDF(n, p1, p2, radius, radius)
 }
 
-func ConeSolid(n Numerics, tip, base Vec3, radius float32) ShapeKernel {
+func ConeSolid(n Numerics, tip, base Vec3, radius float64) ShapeKernel {
 	ids := IDTracker{}
 	entrypointName := genFunctionID(&ids, "cone_solid")
 	return ShapeKernel{
 		Kind: Solid3D,
 		IDs:  ids,
 		Code: WGSL(`
-					fn {{.Entrypoint}}(pRaw: {{.N.Dtype3}}) -> bool {
-						let p = {{.N.AsFloat3}}(pRaw);
-						let tip = {{.N.AsFloat3}}({{.Tip}});
-						let base = {{.N.AsFloat3}}({{.Base}});
-						let axisVec = tip - base;
-						let h = length(axisVec);
-					if (h <= 0.0) {
-						return distance(p, tip) <= {{.Radius}};
+					fn {{.Entrypoint}}(p: {{.N.Dtype3}}) -> bool {
+						let tip = {{.Tip}};
+						let base = {{.Base}};
+						let axisVec = {{.N.Sub3}}(tip, base);
+						let h = {{.N.Len3}}(axisVec);
+						if ({{.N.Le}}(h, {{.N.Zero}})) {
+							return {{.N.Le}}({{.N.Dist3}}(p, tip), {{.Radius}});
+						}
+						let axis = {{.N.Scale3}}(axisVec, {{.N.Div}}({{.N.One}}, h));
+						let axial = {{.N.Dot3}}({{.N.Sub3}}(p, base), axis);
+						let radiusFrac = {{.N.Sub}}({{.N.One}}, {{.N.Div}}(axial, h));
+						if ({{.N.Lt}}(radiusFrac, {{.N.Zero}}) || {{.N.Gt}}(radiusFrac, {{.N.One}})) {
+							return false;
+						}
+						let projection = {{.N.Add3}}(base, {{.N.Scale3}}(axis, axial));
+						return {{.N.Le}}({{.N.Dist3}}(p, projection), {{.N.Mul}}({{.Radius}}, radiusFrac));
 					}
-					let axis = axisVec / h;
-					let axial = dot(p - base, axis);
-					let radiusFrac = 1.0 - axial / h;
-					if (radiusFrac < 0.0 || radiusFrac > 1.0) {
-						return false;
-					}
-						let projection = base + axis * axial;
-						return distance(p, projection) <= {{.Radius}} * radiusFrac;
-					}
-				`, "N", n.Symbols, "Entrypoint", entrypointName, "Tip", tip.WebGPUVec(n), "Base", base.WebGPUVec(n), "Radius", radius),
+				`, "N", n.Symbols, "Entrypoint", entrypointName, "Tip", tip.WebGPUVec(n), "Base", base.WebGPUVec(n), "Radius", n.Literal(radius)),
 		EntrypointName: entrypointName,
 	}
 }
 
-func ConeSDF(n Numerics, tip, base Vec3, radius float32) ShapeKernel {
+func ConeSDF(n Numerics, tip, base Vec3, radius float64) ShapeKernel {
 	return ConeSliceSDF(n, tip, base, 0.0, radius)
 }
 
-func ConeSliceSolid(n Numerics, p1, p2 Vec3, r1, r2 float32) ShapeKernel {
+func ConeSliceSolid(n Numerics, p1, p2 Vec3, r1, r2 float64) ShapeKernel {
 	ids := IDTracker{}
 	entrypointName := genFunctionID(&ids, "cone_slice_solid")
 	return ShapeKernel{
 		Kind: Solid3D,
 		IDs:  ids,
 		Code: WGSL(`
-					fn {{.Entrypoint}}(pRaw: {{.N.Dtype3}}) -> bool {
-						let p = {{.N.AsFloat3}}(pRaw);
-						let a = {{.N.AsFloat3}}({{.P1}});
-						let b = {{.N.AsFloat3}}({{.P2}});
-						let ba = b - a;
-						let h = length(ba);
-					let maxRadius = max({{.Radius1}}, {{.Radius2}});
-					if (h <= 0.0) {
-						return distance(p, a) <= maxRadius;
+					fn {{.Entrypoint}}(p: {{.N.Dtype3}}) -> bool {
+						let a = {{.P1}};
+						let b = {{.P2}};
+						let ba = {{.N.Sub3}}(b, a);
+						let h = {{.N.Len3}}(ba);
+						let maxRadius = {{.N.Max}}({{.Radius1}}, {{.Radius2}});
+						if ({{.N.Le}}(h, {{.N.Zero}})) {
+							return {{.N.Le}}({{.N.Dist3}}(p, a), maxRadius);
+						}
+						let axis = {{.N.Scale3}}(ba, {{.N.Div}}({{.N.One}}, h));
+						let axial = {{.N.Dot3}}({{.N.Sub3}}(p, a), axis);
+						let radiusFrac = {{.N.Sub}}({{.N.One}}, {{.N.Div}}(axial, h));
+						if ({{.N.Lt}}(radiusFrac, {{.N.Zero}}) || {{.N.Gt}}(radiusFrac, {{.N.One}})) {
+							return false;
+						}
+						let projection = {{.N.Add3}}(a, {{.N.Scale3}}(axis, axial));
+						let radius = {{.N.Add}}({{.N.Mul}}({{.Radius1}}, radiusFrac), {{.N.Mul}}({{.Radius2}}, {{.N.Sub}}({{.N.One}}, radiusFrac)));
+						return {{.N.Le}}({{.N.Dist3}}(p, projection), radius);
 					}
-					let axis = ba / h;
-					let axial = dot(p - a, axis);
-					let radiusFrac = 1.0 - axial / h;
-					if (radiusFrac < 0.0 || radiusFrac > 1.0) {
-						return false;
-					}
-					let projection = a + axis * axial;
-						let radius = {{.Radius1}} * radiusFrac + {{.Radius2}} * (1.0 - radiusFrac);
-						return distance(p, projection) <= radius;
-					}
-				`, "N", n.Symbols, "Entrypoint", entrypointName, "P1", p1.WebGPUVec(n), "P2", p2.WebGPUVec(n), "Radius1", r1, "Radius2", r2),
+				`, "N", n.Symbols, "Entrypoint", entrypointName, "P1", p1.WebGPUVec(n), "P2", p2.WebGPUVec(n), "Radius1", n.Literal(r1), "Radius2", n.Literal(r2)),
 		EntrypointName: entrypointName,
 	}
 }
 
-func ConeSliceSDF(n Numerics, p1, p2 Vec3, r1, r2 float32) ShapeKernel {
+func ConeSliceSDF(n Numerics, p1, p2 Vec3, r1, r2 float64) ShapeKernel {
 	ids := IDTracker{}
 	entrypointName := genFunctionID(&ids, "cone_slice_sdf")
 	return ShapeKernel{
 		Kind: SDF3D,
 		IDs:  ids,
 		Code: WGSL(`
-					fn {{.Entrypoint}}(pRaw: {{.N.Dtype3}}) -> {{.N.Dtype}} {
-						let p = {{.N.AsFloat3}}(pRaw);
-						let a = {{.N.AsFloat3}}({{.P1}});
-						let b = {{.N.AsFloat3}}({{.P2}});
-						let ba = b - a;
-						let h = length(ba);
-						let maxRadius = max({{.Radius1}}, {{.Radius2}});
-						if (h <= 0.0) {
-							return {{.N.FromFloat}}(maxRadius - distance(p, a));
+					fn {{.Entrypoint}}(p: {{.N.Dtype3}}) -> {{.N.Dtype}} {
+						let a = {{.P1}};
+						let b = {{.P2}};
+						let ba = {{.N.Sub3}}(b, a);
+						let h = {{.N.Len3}}(ba);
+						let maxRadius = {{.N.Max}}({{.Radius1}}, {{.Radius2}});
+						if ({{.N.Le}}(h, {{.N.Zero}})) {
+							return {{.N.Sub}}(maxRadius, {{.N.Dist3}}(p, a));
 						}
 
-					let axis = ba / h;
-					let pa = p - a;
-					let axial = dot(pa, axis);
-					let radialVec = pa - axis * axial;
-					let radial = length(radialVec);
+						let axis = {{.N.Scale3}}(ba, {{.N.Div}}({{.N.One}}, h));
+						let pa = {{.N.Sub3}}(p, a);
+						let axial = {{.N.Dot3}}(pa, axis);
+						let radialVec = {{.N.Sub3}}(pa, {{.N.Scale3}}(axis, axial));
+						let radial = {{.N.Len3}}(radialVec);
 
-					var inside = false;
-					if (axial >= 0.0 && axial <= h) {
-						let axialFrac = axial / h;
-						let radius = {{.Radius1}} + ({{.Radius2}} - {{.Radius1}}) * axialFrac;
-						inside = radial <= radius;
-					}
+						var inside = false;
+						if ({{.N.Ge}}(axial, {{.N.Zero}}) && {{.N.Le}}(axial, h)) {
+							let axialFrac = {{.N.Div}}(axial, h);
+							let radius = {{.N.Add}}({{.Radius1}}, {{.N.Mul}}({{.N.Sub}}({{.Radius2}}, {{.Radius1}}), axialFrac));
+							inside = {{.N.Le}}(radial, radius);
+						}
 
-					let q = vec2<f32>(axial, radial);
-					let sideA = vec2<f32>(0.0, {{.Radius1}});
-					let sideB = vec2<f32>(h, {{.Radius2}});
-					let sideBA = sideB - sideA;
-					let sidePASeg = q - sideA;
-					let sideLenSq = dot(sideBA, sideBA);
-					var sideT = 0.0;
-					if (sideLenSq > 0.0) {
-						sideT = clamp(dot(sidePASeg, sideBA) / sideLenSq, 0.0, 1.0);
-					}
-					let sideDist = length(sidePASeg - sideBA * sideT);
+						let q = {{.N.Make2}}(axial, radial);
+						let sideA = {{.N.Make2}}({{.N.Zero}}, {{.Radius1}});
+						let sideB = {{.N.Make2}}(h, {{.Radius2}});
+						let sideBA = {{.N.Sub2}}(sideB, sideA);
+						let sidePASeg = {{.N.Sub2}}(q, sideA);
+						let sideLenSq = {{.N.Dot2}}(sideBA, sideBA);
+						var sideT = {{.N.Zero}};
+						if ({{.N.Gt}}(sideLenSq, {{.N.Zero}})) {
+							sideT = {{.N.Clamp}}({{.N.Div}}({{.N.Dot2}}(sidePASeg, sideBA), sideLenSq), {{.N.Zero}}, {{.N.One}});
+						}
+						let sideDist = {{.N.Len2}}({{.N.Sub2}}(sidePASeg, {{.N.Scale2}}(sideBA, sideT)));
 
-					let cap1Axial = q.x;
-					var cap1Dist = length(q);
-					if (q.y < {{.Radius1}}) {
-						cap1Dist = abs(cap1Axial);
-					} else {
-						cap1Dist = length(vec2<f32>(cap1Axial, q.y - {{.Radius1}}));
-					}
-
-					let cap2Axial = q.x - h;
-					var cap2Dist = length(vec2<f32>(cap2Axial, q.y));
-					if (q.y < {{.Radius2}}) {
-						cap2Dist = abs(cap2Axial);
-					} else {
-						cap2Dist = length(vec2<f32>(cap2Axial, q.y - {{.Radius2}}));
-					}
-
-						let unsignedDist = min(sideDist, min(cap1Dist, cap2Dist));
-						if (inside) {
-							return {{.N.FromFloat}}(unsignedDist);
+						let cap1Axial = axial;
+						var cap1Dist = {{.N.Len2}}(q);
+						if ({{.N.Lt}}(radial, {{.Radius1}})) {
+							cap1Dist = {{.N.Abs}}(cap1Axial);
 						} else {
-							return {{.N.FromFloat}}(-unsignedDist);
+							cap1Dist = {{.N.Len2}}({{.N.Make2}}(cap1Axial, {{.N.Sub}}(radial, {{.Radius1}})));
+						}
+
+						let cap2Axial = {{.N.Sub}}(axial, h);
+						var cap2Dist = {{.N.Len2}}({{.N.Make2}}(cap2Axial, radial));
+						if ({{.N.Lt}}(radial, {{.Radius2}})) {
+							cap2Dist = {{.N.Abs}}(cap2Axial);
+						} else {
+							cap2Dist = {{.N.Len2}}({{.N.Make2}}(cap2Axial, {{.N.Sub}}(radial, {{.Radius2}})));
+						}
+
+						let unsignedDist = {{.N.Min}}(sideDist, {{.N.Min}}(cap1Dist, cap2Dist));
+						if (inside) {
+							return unsignedDist;
+						} else {
+							return {{.N.Sub}}({{.N.Zero}}, unsignedDist);
 						}
 					}
-				`, "N", n.Symbols, "Entrypoint", entrypointName, "P1", p1.WebGPUVec(n), "P2", p2.WebGPUVec(n), "Radius1", r1, "Radius2", r2),
+				`, "N", n.Symbols, "Entrypoint", entrypointName, "P1", p1.WebGPUVec(n), "P2", p2.WebGPUVec(n), "Radius1", n.Literal(r1), "Radius2", n.Literal(r2)),
 		EntrypointName: entrypointName,
 	}
 }

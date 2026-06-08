@@ -263,6 +263,10 @@ var Fixed64Numerics Numerics = Numerics{
 			return fixed64_from_float(sin(fixed64_as_float(x)));
 		}
 
+		fn fixed64_atan2(y: Fixed64, x: Fixed64) -> Fixed64 {
+			return fixed64_from_float(atan2(fixed64_as_float(y), fixed64_as_float(x)));
+		}
+
 		fn fixed64_clamp(x: Fixed64, mi: Fixed64, ma: Fixed64) -> Fixed64 {
 			return fixed64_min(fixed64_max(x, mi), ma);
 		}
@@ -439,6 +443,7 @@ var Fixed64Numerics Numerics = Numerics{
 		Sin:       "fixed64_sin",
 		Sin2:      "fixed64_sin2",
 		Sin3:      "fixed64_sin3",
+		Atan2:     "fixed64_atan2",
 		Clamp:     "fixed64_clamp",
 		Dot2:      "fixed64_dot2",
 		Dot3:      "fixed64_dot3",

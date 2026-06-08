@@ -44,7 +44,7 @@ func TestFixed64NumericsMathOps(t *testing.T) {
 			let squared = {{.N.Mul}}(y, y);
 			let trig = {{.N.Add}}({{.N.Cos}}({{.Zero}}), {{.N.Sin}}({{.HalfPi}}));
 			let powers = {{.N.Add}}({{.N.Sqrt}}(squared), {{.N.Pow}}({{.Two}}, {{.Three}}));
-			let raw = {{.N.Add}}({{.N.Add}}(limited_abs, powers), {{.N.Add}}(trig, {{.N.Exp}}({{.Zero}})));
+			let raw = {{.N.Add}}({{.N.Add}}({{.N.Add}}(limited_abs, powers), {{.N.Add}}(trig, {{.N.Exp}}({{.Zero}}))), {{.N.Atan2}}({{.One}}, {{.Zero}}));
 			return {{.N.Clamp}}(raw, {{.Zero}}, {{.Hundred}});
 		`,
 	)
@@ -54,7 +54,7 @@ func TestFixed64NumericsMathOps(t *testing.T) {
 		Vec2{-3, -4},
 		Vec2{0.25, 0.5},
 	)
-	vals.ExpectFloats(t, []float32{17, 12}, 1e-4)
+	vals.ExpectFloats(t, []float32{17 + math.Pi/2, 12 + math.Pi/2}, 1e-4)
 }
 
 func TestFixed64NumericsVectorOps(t *testing.T) {

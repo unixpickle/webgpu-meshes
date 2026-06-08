@@ -57,7 +57,7 @@ func TestMetaballSolid2D(t *testing.T) {
 func TestWeightedMetaballSolid2D(t *testing.T) {
 	c1 := &model2d.Circle{Center: model2d.XY(-0.7, 0.4), Radius: 0.45}
 	c2 := &model2d.Circle{Center: model2d.XY(0.9, -0.2), Radius: 0.35}
-	weights := []float32{1.25, -0.4}
+	weights := []float64{1.25, -0.4}
 	kernel := WeightedMetaballSolid(SmokeFloat32Numerics,
 		QuarticMetaballFalloffFunc(SmokeFloat32Numerics),
 		0.5,
@@ -70,7 +70,7 @@ func TestWeightedMetaballSolid2D(t *testing.T) {
 	expectedSolid := model2d.WeightedMetaballSolid(model2d.QuarticMetaballFalloffFunc,
 		0.5,
 		[]model2d.Metaball{c1, c2},
-		[]float64{float64(weights[0]), float64(weights[1])},
+		weights,
 	)
 
 	testApproxSolid2D(t, expectedSolid, SmokeFloat32Numerics, kernel, 0.01, 0.02)
@@ -125,7 +125,7 @@ func TestMetaballSolid3D(t *testing.T) {
 func TestWeightedMetaballSolid3D(t *testing.T) {
 	s1 := &model3d.Sphere{Center: model3d.XYZ(-0.7, 0.4, 0.1), Radius: 0.45}
 	s2 := &model3d.Sphere{Center: model3d.XYZ(0.9, -0.2, -0.5), Radius: 0.35}
-	weights := []float32{1.25, -0.4}
+	weights := []float64{1.25, -0.4}
 	kernel := WeightedMetaballSolid(SmokeFloat32Numerics,
 		QuarticMetaballFalloffFunc(SmokeFloat32Numerics),
 		0.5,
@@ -138,7 +138,7 @@ func TestWeightedMetaballSolid3D(t *testing.T) {
 	expectedSolid := model3d.WeightedMetaballSolid(model3d.QuarticMetaballFalloffFunc,
 		0.5,
 		[]model3d.Metaball{s1, s2},
-		[]float64{float64(weights[0]), float64(weights[1])},
+		weights,
 	)
 
 	testApproxSolid3D(t, expectedSolid, SmokeFloat32Numerics, kernel, 0.03, 0.06)

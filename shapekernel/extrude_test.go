@@ -19,9 +19,9 @@ func TestLinearExtrudeSolid(t *testing.T) {
 	referenceSolid := linearExtrudeReference(rect, height, center, twist, scale)
 	kernel := LinearExtrudeSolid(SmokeFloat32Numerics,
 		Rect2DSolid(SmokeFloat32Numerics, Vec2{0.9, 0.5}),
-		float32(height),
+		height,
 		center,
-		float32(twist),
+		twist,
 		Vec2{scale[0], scale[1]},
 	)
 
@@ -48,7 +48,7 @@ func TestLinearExtrudeSDF(t *testing.T) {
 		},
 		0.01,
 		8,
-	)), float32(height), center)
+	)), height, center)
 
 	testSDFKernel3D(t, referenceSDF, SmokeFloat32Numerics, kernel, 1e-4)
 }
@@ -79,7 +79,7 @@ func TestRevolveSolidRange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	kernel := RevolveSolidRange(SmokeFloat32Numerics, Mesh2DSolid(SmokeFloat32Numerics, model2d.MarchingSquaresSearch(profileSolid, 0.01, 8)), float32(angle), float32(start))
+	kernel := RevolveSolidRange(SmokeFloat32Numerics, Mesh2DSolid(SmokeFloat32Numerics, model2d.MarchingSquaresSearch(profileSolid, 0.01, 8)), angle, start)
 
 	testApproxSolid3D(t, referenceSolid, SmokeFloat32Numerics, kernel, 0.03, 0.06)
 }
@@ -117,10 +117,10 @@ func TestInsetExtrude(t *testing.T) {
 	)
 	kernel := InsetExtrude(SmokeFloat32Numerics,
 		Rect2DSDF(SmokeFloat32Numerics, Vec2{0.9, 0.5}),
-		float32(height),
+		height,
 		center,
-		float32(bottom),
-		float32(top),
+		bottom,
+		top,
 		bottomFn,
 		topFn,
 	)

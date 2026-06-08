@@ -124,21 +124,16 @@ func solidBooleanOp(n Numerics, solids []ShapeKernel, op, name string) ShapeKern
 }
 
 func clipSolid(n Numerics, k ShapeKernel, minVec, maxVec Vector) ShapeKernel {
-	conditions := clipConditions(k.Kind.Dim(), minVec, maxVec, "pFloat")
+	conditions := clipConditions(n, k.Kind.Dim(), minVec, maxVec, "p")
 	if len(conditions) == 0 {
 		return k
 	}
 	fnName := genFunctionID(&k.IDs, "clip_solid")
-	asFloat := n.Symbols.AsFloat2
-	if k.Kind.Dim() == 3 {
-		asFloat = n.Symbols.AsFloat3
-	}
 	AppendWGSL(&k, `
 			fn {{.Entrypoint}}(p: {{.ArgType}}) -> bool {
-				let pFloat = {{.AsFloat}}(p);
 				return {{.Inner}}(p) && ({{.Conditions}});
 			}
-		`, "Entrypoint", fnName, "ArgType", k.Kind.ArgType(n), "AsFloat", asFloat, "Inner", k.EntrypointName, "Conditions", strings.Join(conditions, " && "))
+		`, "Entrypoint", fnName, "ArgType", k.Kind.ArgType(n), "Inner", k.EntrypointName, "Conditions", strings.Join(conditions, " && "))
 	k.EntrypointName = fnName
 	return k
 }
@@ -162,7 +157,7 @@ func clipSDF(n Numerics, k ShapeKernel, minVec, maxVec Vector) ShapeKernel {
 
 func clipFieldKernel(n Numerics, ids IDTracker, kind ShapeKind, minVec, maxVec Vector) (ShapeKernel, string, bool) {
 	dim := kind.Dim()
-	conditions := clipConditions(dim, minVec, maxVec, "p")
+	conditions := clipConditions(n, dim, minVec, maxVec, "p")
 	if len(conditions) == 0 {
 		return ShapeKernel{IDs: ids}, "", false
 	}
@@ -172,21 +167,21 @@ func clipFieldKernel(n Numerics, ids IDTracker, kind ShapeKind, minVec, maxVec V
 	var insideTerms []string
 	outsideIdx := 0
 	for i := 0; i < dim; i++ {
-		component := vectorComponentName(i)
 		minVal, maxVal := clipBoundsAt(minVec, maxVec, i)
-		if !math.IsInf(float64(minVal), -1) {
+		componentExpr := vectorComponentExpr(n, dim, "p", i)
+		if !math.IsInf(minVal, -1) {
 			name := "outside_" + strconv.Itoa(outsideIdx)
 			outsideIdx++
-			outsideLets = append(outsideLets, WGSL("let {{.Name}} = max({{.Min}} - p.{{.Component}}, 0.0);", "Name", name, "Min", minVal, "Component", component))
+			outsideLets = append(outsideLets, WGSL("let {{.Name}} = {{.N.Max}}({{.N.Sub}}({{.Min}}, {{.Component}}), {{.N.Zero}});", "N", n.Symbols, "Name", name, "Min", n.Literal(minVal), "Component", componentExpr))
 			outsideTerms = append(outsideTerms, name)
-			insideTerms = append(insideTerms, WGSL("p.{{.Component}} - {{.Min}}", "Component", component, "Min", minVal))
+			insideTerms = append(insideTerms, WGSL("{{.N.Sub}}({{.Component}}, {{.Min}})", "N", n.Symbols, "Component", componentExpr, "Min", n.Literal(minVal)))
 		}
-		if !math.IsInf(float64(maxVal), 1) {
+		if !math.IsInf(maxVal, 1) {
 			name := "outside_" + strconv.Itoa(outsideIdx)
 			outsideIdx++
-			outsideLets = append(outsideLets, WGSL("let {{.Name}} = max(p.{{.Component}} - {{.Max}}, 0.0);", "Name", name, "Component", component, "Max", maxVal))
+			outsideLets = append(outsideLets, WGSL("let {{.Name}} = {{.N.Max}}({{.N.Sub}}({{.Component}}, {{.Max}}), {{.N.Zero}});", "N", n.Symbols, "Name", name, "Component", componentExpr, "Max", n.Literal(maxVal)))
 			outsideTerms = append(outsideTerms, name)
-			insideTerms = append(insideTerms, WGSL("{{.Max}} - p.{{.Component}}", "Max", maxVal, "Component", component))
+			insideTerms = append(insideTerms, WGSL("{{.N.Sub}}({{.Max}}, {{.Component}})", "N", n.Symbols, "Max", n.Literal(maxVal), "Component", componentExpr))
 		}
 	}
 
@@ -194,14 +189,18 @@ func clipFieldKernel(n Numerics, ids IDTracker, kind ShapeKind, minVec, maxVec V
 	if len(outsideTerms) > 1 {
 		squaredTerms := make([]string, len(outsideTerms))
 		for i, term := range outsideTerms {
-			squaredTerms[i] = WGSL("{{.Term}} * {{.Term}}", "Term", term)
+			squaredTerms[i] = WGSL("{{.N.Mul}}({{.Term}}, {{.Term}})", "N", n.Symbols, "Term", term)
 		}
-		outsideExpr = WGSL("sqrt({{.Expr}})", "Expr", strings.Join(squaredTerms, " + "))
+		sumExpr := squaredTerms[0]
+		for _, term := range squaredTerms[1:] {
+			sumExpr = WGSL("{{.N.Add}}({{.Left}}, {{.Right}})", "N", n.Symbols, "Left", sumExpr, "Right", term)
+		}
+		outsideExpr = WGSL("{{.N.Sqrt}}({{.Expr}})", "N", n.Symbols, "Expr", sumExpr)
 	}
 
 	insideExpr := insideTerms[0]
 	for _, term := range insideTerms[1:] {
-		insideExpr = WGSL("min({{.Left}}, {{.Right}})", "Left", insideExpr, "Right", term)
+		insideExpr = WGSL("{{.N.Min}}({{.Left}}, {{.Right}})", "N", n.Symbols, "Left", insideExpr, "Right", term)
 	}
 
 	entrypointName := genFunctionID(&ids, "clip_field")
@@ -209,20 +208,18 @@ func clipFieldKernel(n Numerics, ids IDTracker, kind ShapeKind, minVec, maxVec V
 		Kind: kind,
 		IDs:  ids,
 		Code: WGSL(`
-					fn {{.Entrypoint}}(pRaw: {{.ArgType}}) -> {{.ReturnType}} {
-						let p = {{.AsFloat}}(pRaw);
+					fn {{.Entrypoint}}(p: {{.ArgType}}) -> {{.ReturnType}} {
 						{{.OutsideLets}}
 						if ({{.Conditions}}) {
-							return {{.N.FromFloat}}({{.InsideExpr}});
+							return {{.InsideExpr}};
 						}
-						return {{.N.FromFloat}}(-({{.OutsideExpr}}));
+						return {{.N.Sub}}({{.N.Zero}}, {{.OutsideExpr}});
 					}
 				`,
 			"N", n.Symbols,
 			"Entrypoint", entrypointName,
 			"ArgType", kind.ArgType(n),
 			"ReturnType", kind.ReturnType(n),
-			"AsFloat", map[bool]string{true: n.Symbols.AsFloat3, false: n.Symbols.AsFloat2}[dim == 3],
 			"OutsideLets", strings.Join(outsideLets, "\n\t"),
 			"Conditions", strings.Join(conditions, " && "),
 			"InsideExpr", insideExpr,
@@ -232,31 +229,52 @@ func clipFieldKernel(n Numerics, ids IDTracker, kind ShapeKind, minVec, maxVec V
 	}, entrypointName, true
 }
 
-func clipConditions(dim int, minVec, maxVec Vector, pointName string) []string {
+func clipConditions(n Numerics, dim int, minVec, maxVec Vector, pointName string) []string {
 	var conditions []string
 	for i := 0; i < dim; i++ {
-		component := vectorComponentName(i)
 		minVal, maxVal := clipBoundsAt(minVec, maxVec, i)
 		if minVal > maxVal {
 			panic("invalid clip bounds")
 		}
-		if !math.IsInf(float64(minVal), -1) {
-			conditions = append(conditions, WGSL("{{.Point}}.{{.Component}} >= {{.Min}}", "Point", pointName, "Component", component, "Min", minVal))
+		componentExpr := vectorComponentExpr(n, dim, pointName, i)
+		if !math.IsInf(minVal, -1) {
+			conditions = append(conditions, WGSL("{{.N.Ge}}({{.Component}}, {{.Min}})", "N", n.Symbols, "Component", componentExpr, "Min", n.Literal(minVal)))
 		}
-		if !math.IsInf(float64(maxVal), 1) {
-			conditions = append(conditions, WGSL("{{.Point}}.{{.Component}} <= {{.Max}}", "Point", pointName, "Component", component, "Max", maxVal))
+		if !math.IsInf(maxVal, 1) {
+			conditions = append(conditions, WGSL("{{.N.Le}}({{.Component}}, {{.Max}})", "N", n.Symbols, "Component", componentExpr, "Max", n.Literal(maxVal)))
 		}
 	}
 	return conditions
 }
 
-func clipBoundsAt(minVec, maxVec Vector, i int) (float32, float32) {
+func clipBoundsAt(minVec, maxVec Vector, i int) (float64, float64) {
 	minVal := minVec.At(i)
 	maxVal := maxVec.At(i)
-	if math.IsNaN(float64(minVal)) || math.IsNaN(float64(maxVal)) {
+	if math.IsNaN(minVal) || math.IsNaN(maxVal) {
 		panic("clip bounds cannot be NaN")
 	}
-	return float32(minVal), float32(maxVal)
+	return minVal, maxVal
+}
+
+func vectorComponentExpr(n Numerics, dim int, vectorName string, i int) string {
+	if dim == 2 {
+		switch i {
+		case 0:
+			return WGSL("{{.N.Get2X}}({{.Vector}})", "N", n.Symbols, "Vector", vectorName)
+		case 1:
+			return WGSL("{{.N.Get2Y}}({{.Vector}})", "N", n.Symbols, "Vector", vectorName)
+		}
+	} else if dim == 3 {
+		switch i {
+		case 0:
+			return WGSL("{{.N.Get3X}}({{.Vector}})", "N", n.Symbols, "Vector", vectorName)
+		case 1:
+			return WGSL("{{.N.Get3Y}}({{.Vector}})", "N", n.Symbols, "Vector", vectorName)
+		case 2:
+			return WGSL("{{.N.Get3Z}}({{.Vector}})", "N", n.Symbols, "Vector", vectorName)
+		}
+	}
+	panic("unsupported vector dimension")
 }
 
 func vectorComponentName(i int) string {

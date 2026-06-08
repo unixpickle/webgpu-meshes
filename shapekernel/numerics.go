@@ -74,6 +74,7 @@ type NumericSymbols struct {
 	Sin   string
 	Sin2  string
 	Sin3  string
+	Atan2 string
 	Clamp string
 
 	// Vector operations
@@ -367,6 +368,10 @@ var NativeFloat32Numerics Numerics = Numerics{
 			return sin(x);
 		}
 
+		fn num_f32_atan2(y: f32, x: f32) -> f32 {
+			return atan2(y, x);
+		}
+
 		fn num_f32_clamp(x: f32, mi: f32, ma: f32) -> f32 {
 			return clamp(x, mi, ma);
 		}
@@ -475,6 +480,7 @@ var NativeFloat32Numerics Numerics = Numerics{
 		Sin:       "num_f32_sin",
 		Sin2:      "num_f32_sin2",
 		Sin3:      "num_f32_sin3",
+		Atan2:     "num_f32_atan2",
 		Clamp:     "num_f32_clamp",
 		Dot2:      "num_f32_dot2",
 		Dot3:      "num_f32_dot3",

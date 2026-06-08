@@ -474,7 +474,7 @@ func TestCylinderPrimitive(t *testing.T) {
 		P2:     model3d.XYZ(float64(p2[0]), float64(p2[1]), float64(p2[2])),
 		Radius: float64(radius),
 	}
-	testPrimitive3D(t, shape, SmokeFloat32Numerics, CylinderSolid(SmokeFloat32Numerics, p1, p2, radius), CylinderSDF(SmokeFloat32Numerics, p1, p2, radius), 2e-4, 2e-4)
+	testPrimitive3D(t, shape, SmokeFloat32Numerics, CylinderSolid(SmokeFloat32Numerics, p1, p2, float64(radius)), CylinderSDF(SmokeFloat32Numerics, p1, p2, float64(radius)), 2e-4, 2e-4)
 }
 
 func TestLineJoinPrimitive(t *testing.T) {
@@ -544,7 +544,7 @@ func TestConePrimitive(t *testing.T) {
 		Base:   model3d.XYZ(float64(base[0]), float64(base[1]), float64(base[2])),
 		Radius: float64(radius),
 	}
-	testPrimitive3D(t, shape, SmokeFloat32Numerics, ConeSolid(SmokeFloat32Numerics, tip, base, radius), ConeSDF(SmokeFloat32Numerics, tip, base, radius), 5e-4, 5e-4)
+	testPrimitive3D(t, shape, SmokeFloat32Numerics, ConeSolid(SmokeFloat32Numerics, tip, base, float64(radius)), ConeSDF(SmokeFloat32Numerics, tip, base, float64(radius)), 5e-4, 5e-4)
 }
 
 func TestConeSlicePrimitive(t *testing.T) {
@@ -558,5 +558,5 @@ func TestConeSlicePrimitive(t *testing.T) {
 		R1: float64(r1),
 		R2: float64(r2),
 	}
-	testPrimitive3D(t, shape, SmokeFloat32Numerics, ConeSliceSolid(SmokeFloat32Numerics, p1, p2, r1, r2), ConeSliceSDF(SmokeFloat32Numerics, p1, p2, r1, r2), 5e-4, 5e-4)
+	testPrimitive3D(t, shape, SmokeFloat32Numerics, ConeSliceSolid(SmokeFloat32Numerics, p1, p2, float64(r1), float64(r2)), ConeSliceSDF(SmokeFloat32Numerics, p1, p2, float64(r1), float64(r2)), 5e-4, 5e-4)
 }

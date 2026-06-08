@@ -1,6 +1,6 @@
 package shapekernel
 
-func InversePowerMetaballFalloffFunc(n Numerics, power float32) ShapeKernel {
+func InversePowerMetaballFalloffFunc(n Numerics, power float64) ShapeKernel {
 	if power <= 0 {
 		panic("power must be positive")
 	}
@@ -16,7 +16,7 @@ func InversePowerMetaballFalloffFunc(n Numerics, power float32) ShapeKernel {
 						}
 						return {{.N.Pow}}(r, {{.NegPower}});
 					}
-				`, "N", n.Symbols, "Entrypoint", entrypointName, "Inf", n.Literal(1e30), "NegPower", n.Literal(float64(-power))),
+				`, "N", n.Symbols, "Entrypoint", entrypointName, "Inf", n.Literal(1e30), "NegPower", n.Literal(-power)),
 		EntrypointName: entrypointName,
 	}
 }
@@ -77,7 +77,7 @@ func GaussianMetaballFalloffFunc(n Numerics) ShapeKernel {
 	}
 }
 
-func WyvillMetaballFalloffFunc(n Numerics, d float32) ShapeKernel {
+func WyvillMetaballFalloffFunc(n Numerics, d float64) ShapeKernel {
 	if d <= 0 {
 		panic("d must be positive")
 	}
@@ -98,7 +98,7 @@ func WyvillMetaballFalloffFunc(n Numerics, d float32) ShapeKernel {
 						let value = {{.N.Sub}}({{.N.One}}, ratio2);
 						return {{.N.Mul}}(value, value);
 					}
-				`, "N", n.Symbols, "Entrypoint", entrypointName, "Radius", n.Literal(float64(d)), "Inf", n.Literal(1e30)),
+				`, "N", n.Symbols, "Entrypoint", entrypointName, "Radius", n.Literal(d), "Inf", n.Literal(1e30)),
 		EntrypointName: entrypointName,
 	}
 }
@@ -125,8 +125,8 @@ func SDFToMetaball(n Numerics, k ShapeKernel) ShapeKernel {
 	return k
 }
 
-func MetaballSolid(n Numerics, falloff ShapeKernel, radiusThreshold float32, metaballs ...ShapeKernel) ShapeKernel {
-	weights := make([]float32, len(metaballs))
+func MetaballSolid(n Numerics, falloff ShapeKernel, radiusThreshold float64, metaballs ...ShapeKernel) ShapeKernel {
+	weights := make([]float64, len(metaballs))
 	for i := range weights {
 		weights[i] = 1
 	}
@@ -136,9 +136,9 @@ func MetaballSolid(n Numerics, falloff ShapeKernel, radiusThreshold float32, met
 func WeightedMetaballSolid(
 	n Numerics,
 	falloff ShapeKernel,
-	radiusThreshold float32,
+	radiusThreshold float64,
 	metaballs []ShapeKernel,
-	weights []float32,
+	weights []float64,
 ) ShapeKernel {
 	if len(metaballs) == 0 {
 		panic("expected at least one metaball")
@@ -179,7 +179,7 @@ func WeightedMetaballSolid(
 	for i, call := range metaballCalls {
 		sumCode[i] = WGSL("{{.N.Mul}}({{.Weight}}, {{.Falloff}}({{.Call}}))",
 			"N", n.Symbols,
-			"Weight", n.Literal(float64(weights[i])),
+			"Weight", n.Literal(weights[i]),
 			"Falloff", falloff.EntrypointName,
 			"Call", call,
 		)
@@ -205,7 +205,7 @@ func WeightedMetaballSolid(
 		"ArgType", kind.ArgType(n),
 		"N", n.Symbols,
 		"Falloff", falloff.EntrypointName,
-		"RadiusThreshold", n.Literal(float64(radiusThreshold)),
+		"RadiusThreshold", n.Literal(radiusThreshold),
 		"SumExpr", sumExpr,
 	)
 	k.Kind = solidKind

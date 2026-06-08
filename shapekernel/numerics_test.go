@@ -287,6 +287,10 @@ var SmokeFloat32Numerics Numerics = Numerics{
 			return SmokeF32v3(sin(x.value));
 		}
 
+		fn smoke_f32_atan2(y: SmokeF32, x: SmokeF32) -> SmokeF32 {
+			return SmokeF32(atan2(y.value, x.value));
+		}
+
 		fn smoke_f32_clamp(x: SmokeF32, mi: SmokeF32, ma: SmokeF32) -> SmokeF32 {
 			return SmokeF32(clamp(x.value, mi.value, ma.value));
 		}
