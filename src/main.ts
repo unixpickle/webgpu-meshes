@@ -45,7 +45,7 @@ root.innerHTML = `
       <p class="eyebrow">WebGPU Mesher</p>
       <h1 id="hero-title">Turn a WGSL solid into STL or SVG.</h1>
       <p id="hero-lede" class="lede">
-        Use the STL tab for 3D solids with <code>solidOccupancy(p: vec3&lt;f32&gt;)</code>, or the SVG tab for 2D outlines with <code>solidOccupancy(p: vec2&lt;f32&gt;)</code>.
+        Use the STL tab for 3D solids with a <code>SolidVector</code> from <code>vec3&lt;f32&gt;</code>, or the SVG tab for 2D outlines from <code>vec2&lt;f32&gt;</code>.
       </p>
     </section>
 
@@ -454,8 +454,8 @@ function updateTargetUI(): void {
 
   heroTitle.textContent = isSTL ? 'Turn a WGSL solid into STL.' : 'Turn a WGSL solid into SVG.';
   heroLede.innerHTML = isSTL
-    ? 'Define <code>solidOccupancy(p: vec3&lt;f32&gt;)</code>, set bounds and spacing, then export the generated mesh as STL.'
-    : 'Define <code>solidOccupancy(p: vec2&lt;f32&gt;)</code>, set 2D bounds and spacing, then export the marching-squares outline as SVG.';
+    ? 'Define <code>SolidVector</code> helpers for <code>vec3&lt;f32&gt;</code>, set bounds and spacing, then export STL.'
+    : 'Define <code>SolidVector</code> helpers for <code>vec2&lt;f32&gt;</code>, set 2D bounds and spacing, then export SVG.';
   boundsMinLabel.textContent = isSTL ? 'Bounding box min' : 'Bounds min';
   boundsMaxLabel.textContent = isSTL ? 'Bounding box max' : 'Bounds max';
   searchIterationsLabel.textContent = isSTL ? 'Search iterations' : 'Search iterations';

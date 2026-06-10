@@ -55,7 +55,11 @@ export interface MarchingCubesWebGPUOptions {
   device: GPUDevice;
   /**
    * WGSL source that defines:
-   *   fn solidOccupancy(p: vec3<f32>) -> bool
+   *   alias SolidVector = ...
+   *   fn solidVectorFromFloat(p: vec3<f32>) -> SolidVector
+   *   fn solidVectorAdd(a: SolidVector, b: SolidVector) -> SolidVector
+   *   fn solidVectorLinearCombination(a: SolidVector, aCoeff: f32, b: SolidVector, bCoeff: f32) -> SolidVector
+   *   fn solidOccupancy(p: SolidVector) -> bool
    * The function is inlined into occupancy-evaluation shaders.
    */
   solidWGSL: string;
@@ -941,6 +945,20 @@ function solidBindingWGSL(solidBindings: PreparedSolidBindings): string {
 
 function occupancyHelpersWGSL(): string {
   return /* wgsl */`
+fn solidOccupancyFromFloat3(p: vec3<f32>) -> bool {
+  return solidOccupancy(solidVectorFromFloat(p));
+}
+
+fn solidOccupancyMidpoint3(p0: vec3<f32>, p1: vec3<f32>) -> bool {
+  let mid = solidVectorLinearCombination(
+    solidVectorFromFloat(p0),
+    0.5,
+    solidVectorFromFloat(p1),
+    0.5,
+  );
+  return solidOccupancy(mid);
+}
+
 fn bisectOccupancyEdge(p0: vec3<f32>, p1: vec3<f32>, occ0: bool) -> vec3<f32> {
   var lo = p0;
   var hi = p1;
@@ -949,7 +967,7 @@ fn bisectOccupancyEdge(p0: vec3<f32>, p1: vec3<f32>, occ0: bool) -> vec3<f32> {
   loop {
     if (i >= params.bisectionSteps) { break; }
     let mid = 0.5 * (lo + hi);
-    let midOcc = solidOccupancy(mid);
+    let midOcc = solidOccupancyMidpoint3(lo, hi);
     if (midOcc == loOcc) {
       lo = mid;
     } else {
@@ -1057,7 +1075,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let t = i / sx;
   let iy = t % sy;
   let localZ = batch.localZStart + t / sy;
-  corners[cornerIndexLocal(ix, iy, localZ)] = select(0u, 1u, solidOccupancy(cornerPositionLocal(ix, iy, localZ)));
+  corners[cornerIndexLocal(ix, iy, localZ)] = select(0u, 1u, solidOccupancyFromFloat3(cornerPositionLocal(ix, iy, localZ)));
 }
 `;
 }

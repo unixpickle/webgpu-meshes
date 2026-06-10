@@ -89,7 +89,11 @@ export interface DualContouringWebGPUOptions {
   device: GPUDevice;
   /**
    * WGSL source that defines:
-   *   fn solidOccupancy(p: vec3<f32>) -> bool
+   *   alias SolidVector = ...
+   *   fn solidVectorFromFloat(p: vec3<f32>) -> SolidVector
+   *   fn solidVectorAdd(a: SolidVector, b: SolidVector) -> SolidVector
+   *   fn solidVectorLinearCombination(a: SolidVector, aCoeff: f32, b: SolidVector, bCoeff: f32) -> SolidVector
+   *   fn solidOccupancy(p: SolidVector) -> bool
    * The function is inlined into every compute shader.
    */
   solidWGSL: string;
@@ -1557,17 +1561,44 @@ function buildShaderBundle(solidWGSL: string, solidBindings: PreparedSolidBindin
 
 function surfaceHelpersWGSL(_solidWGSL: string): string {
   return /* wgsl */`
+fn solidOccupancyFromFloat3(p: vec3<f32>) -> bool {
+  return solidOccupancy(solidVectorFromFloat(p));
+}
+
+fn solidOccupancyAddFloat3(a: vec3<f32>, b: vec3<f32>) -> bool {
+  return solidOccupancy(solidVectorAdd(solidVectorFromFloat(a), solidVectorFromFloat(b)));
+}
+
+fn solidOccupancyLinearCombinationFloat3(a: vec3<f32>, aCoeff: f32, b: vec3<f32>, bCoeff: f32) -> bool {
+  return solidOccupancy(solidVectorLinearCombination(
+    solidVectorFromFloat(a),
+    aCoeff,
+    solidVectorFromFloat(b),
+    bCoeff,
+  ));
+}
+
+fn solidOccupancyMidpoint3(p0: vec3<f32>, p1: vec3<f32>) -> bool {
+  let mid = solidVectorLinearCombination(
+    solidVectorFromFloat(p0),
+    0.5,
+    solidVectorFromFloat(p1),
+    0.5,
+  );
+  return solidOccupancy(mid);
+}
+
 fn estimateNormal(p: vec3<f32>) -> vec3<f32> {
   let eps = max(params.normalStep, 1e-5);
   var axes = array<vec3<f32>, 3>(
-    vec3<f32>(-0.7107294727984605, -0.12934902142019175, 0.6914712193238857) * eps,
-    vec3<f32>(0.09870891687574183, -0.9915624053549226, -0.08402705526185106) * eps,
-    vec3<f32>(0.696505682837434, 0.008533870423146774, 0.7175005274080017) * eps,
+    vec3<f32>(-0.7107294727984605, -0.12934902142019175, 0.6914712193238857),
+    vec3<f32>(0.09870891687574183, -0.9915624053549226, -0.08402705526185106),
+    vec3<f32>(0.696505682837434, 0.008533870423146774, 0.7175005274080017),
   );
   var contains = array<u32, 3>(
-    select(0u, 1u, solidOccupancy(p + axes[0])),
-    select(0u, 1u, solidOccupancy(p + axes[1])),
-    select(0u, 1u, solidOccupancy(p + axes[2])),
+    select(0u, 1u, solidOccupancyLinearCombinationFloat3(p, 1.0, axes[0], eps)),
+    select(0u, 1u, solidOccupancyLinearCombinationFloat3(p, 1.0, axes[1], eps)),
+    select(0u, 1u, solidOccupancyLinearCombinationFloat3(p, 1.0, axes[2], eps)),
   );
   var planeAxes = array<vec3<f32>, 2>(vec3<f32>(0.0), vec3<f32>(0.0));
 
@@ -1586,9 +1617,9 @@ fn estimateNormal(p: vec3<f32>) -> vec3<f32> {
       var mp = v1 + v2;
       let mpNorm = length(mp);
       if (mpNorm > 1e-20) {
-        mp *= eps / mpNorm;
+        mp /= mpNorm;
       }
-      if (solidOccupancy(p + mp)) {
+      if (solidOccupancyLinearCombinationFloat3(p, 1.0, mp, eps)) {
         v1 = mp;
       } else {
         v2 = mp;
@@ -1606,7 +1637,7 @@ fn estimateNormal(p: vec3<f32>) -> vec3<f32> {
   }
 
   var res = normalize(cross(planeAxes[0], planeAxes[1]));
-  if (solidOccupancy(p + res * eps)) {
+  if (solidOccupancyLinearCombinationFloat3(p, 1.0, res, eps)) {
     res = -res;
   }
   return res;
@@ -1620,7 +1651,7 @@ fn bisectOccupancyEdge(p0: vec3<f32>, p1: vec3<f32>, occ0: bool) -> vec3<f32> {
   loop {
     if (i >= params.bisectionSteps) { break; }
     let mid = 0.5 * (lo + hi);
-    let midOcc = solidOccupancy(mid);
+    let midOcc = solidOccupancyMidpoint3(lo, hi);
     if (midOcc == loOcc) {
       lo = mid;
     } else {
@@ -1795,7 +1826,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let t = i / sx;
   let iy = t % sy;
   let localZ = batch.localZStart + t / sy;
-  corners[cornerIndexLocal(ix, iy, localZ)] = select(0u, 1u, solidOccupancy(cornerPositionLocal(ix, iy, localZ)));
+  corners[cornerIndexLocal(ix, iy, localZ)] = select(0u, 1u, solidOccupancyFromFloat3(cornerPositionLocal(ix, iy, localZ)));
 }
 `;
 }
@@ -2251,21 +2282,57 @@ ${decode}
 }
 
 export const exampleSphereSolidWGSL = /* wgsl */`
-fn solidOccupancy(p: vec3<f32>) -> bool {
-  let center = vec3<f32>(0.0, 0.0, 0.0);
+alias SolidVector = vec3<f32>;
+
+fn solidVectorFromFloat(p: vec3<f32>) -> SolidVector {
+  return p;
+}
+
+fn solidVectorAdd(a: SolidVector, b: SolidVector) -> SolidVector {
+  return a + b;
+}
+
+fn solidVectorLinearCombination(a: SolidVector, aCoeff: f32, b: SolidVector, bCoeff: f32) -> SolidVector {
+  return a * aCoeff + b * bCoeff;
+}
+
+fn solidOccupancy(p: SolidVector) -> bool {
+  let center = solidVectorFromFloat(vec3<f32>(0.0, 0.0, 0.0));
   let radius = 1.0;
-  return distance(p, center) <= radius;
+  let delta = solidVectorLinearCombination(p, 1.0, center, -1.0);
+  let dx = delta.x;
+  let dy = delta.y;
+  let dz = delta.z;
+  return sqrt(dx * dx + dy * dy + dz * dz) <= radius;
 }
 `;
 
 export const exampleCutCornerSphereSolidWGSL = /* wgsl */`
-fn solidOccupancy(p: vec3<f32>) -> bool {
+alias SolidVector = vec3<f32>;
+
+fn solidVectorFromFloat(p: vec3<f32>) -> SolidVector {
+  return p;
+}
+
+fn solidVectorAdd(a: SolidVector, b: SolidVector) -> SolidVector {
+  return a + b;
+}
+
+fn solidVectorLinearCombination(a: SolidVector, aCoeff: f32, b: SolidVector, bCoeff: f32) -> SolidVector {
+  return a * aCoeff + b * bCoeff;
+}
+
+fn solidOccupancy(p: SolidVector) -> bool {
   if (p.x > 0 && p.y > 0 && p.z > 0) {
     return false;
   }
-  let center = vec3<f32>(0.0, 0.0, 0.0);
+  let center = solidVectorFromFloat(vec3<f32>(0.0, 0.0, 0.0));
   let radius = 1.0;
-  return distance(p, center) <= radius;
+  let delta = solidVectorLinearCombination(p, 1.0, center, -1.0);
+  let dx = delta.x;
+  let dy = delta.y;
+  let dz = delta.z;
+  return sqrt(dx * dx + dy * dy + dz * dz) <= radius;
 }
 `;
 
