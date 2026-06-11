@@ -27,7 +27,9 @@ func LinearExtrudeSolid(n Numerics, k ShapeKernel, height float64, center bool, 
 	}
 	z0, z1 := linearExtrudeZBounds(height, center)
 	fnName := genFunctionID(&k.IDs, "linear_extrude")
-	AppendWGSL(&k, `
+	AppendWGSL(
+		&k,
+		`
 			fn {{.Entrypoint}}(p: {{.N.Dtype3}}) -> bool {
 				if ({{.N.Lt}}({{.N.Get3Z}}(p), {{.ZMin}}) || {{.N.Gt}}({{.N.Get3Z}}(p), {{.ZMax}})) {
 					return false;
@@ -78,7 +80,9 @@ func LinearExtrudeSDF(n Numerics, k ShapeKernel, height float64, center bool) Sh
 	}
 	z0, z1 := linearExtrudeZBounds(height, center)
 	fnName := genFunctionID(&k.IDs, "linear_extrude_sdf")
-	AppendWGSL(&k, `
+	AppendWGSL(
+		&k,
+		`
 			fn {{.Entrypoint}}(p: {{.N.Dtype3}}) -> {{.N.Dtype}} {
 				let p2d = {{.N.Make2}}({{.N.Get3X}}(p), {{.N.Get3Y}}(p));
 				let sdf2d = {{.Inner}}(p2d);
@@ -97,7 +101,13 @@ func LinearExtrudeSDF(n Numerics, k ShapeKernel, height float64, center bool) Sh
 					return sdf2d;
 				}
 			}
-		`, "N", n.Symbols, "Entrypoint", fnName, "Inner", k.EntrypointName, "ZMin", n.Literal(z0), "ZMax", n.Literal(z1))
+		`,
+		"N", n.Symbols,
+		"Entrypoint", fnName,
+		"Inner", k.EntrypointName,
+		"ZMin", n.Literal(z0),
+		"ZMax", n.Literal(z1),
+	)
 	k.Kind = SDF3D
 	k.EntrypointName = fnName
 	return k
@@ -111,7 +121,9 @@ func RevolveSDF(n Numerics, k ShapeKernel) ShapeKernel {
 		panic("expected 2D SDF kernel")
 	}
 	fnName := genFunctionID(&k.IDs, "revolve_sdf")
-	AppendWGSL(&k, `
+	AppendWGSL(
+		&k,
+		`
 			fn {{.Entrypoint}}(p: {{.N.Dtype3}}) -> {{.N.Dtype}} {
 				let r = {{.N.Len2}}({{.N.Make2}}({{.N.Get3X}}(p), {{.N.Get3Y}}(p)));
 				let z = {{.N.Get3Z}}(p);
@@ -119,7 +131,11 @@ func RevolveSDF(n Numerics, k ShapeKernel) ShapeKernel {
 				let dNeg = {{.Inner}}({{.N.Make2}}({{.N.Sub}}({{.N.Zero}}, r), z));
 				return {{.N.Max}}(dPos, dNeg);
 			}
-		`, "N", n.Symbols, "Entrypoint", fnName, "Inner", k.EntrypointName)
+		`,
+		"N", n.Symbols,
+		"Entrypoint", fnName,
+		"Inner", k.EntrypointName,
+	)
 	k.Kind = SDF3D
 	k.EntrypointName = fnName
 	return k
@@ -143,21 +159,29 @@ func RevolveSolidRange(n Numerics, k ShapeKernel, angleRad float64, startRad flo
 
 	if math.Abs(angleRad) >= 2*math.Pi-1e-9 {
 		fnName := genFunctionID(&k.IDs, "revolve_solid")
-		AppendWGSL(&k, `
-			fn {{.Entrypoint}}(p: {{.N.Dtype3}}) -> bool {
-				let r = {{.N.Len2}}({{.N.Make2}}({{.N.Get3X}}(p), {{.N.Get3Y}}(p)));
-				let z = {{.N.Get3Z}}(p);
-				return {{.Inner}}({{.N.Make2}}(r, z)) ||
-					{{.Inner}}({{.N.Make2}}({{.N.Sub}}({{.N.Zero}}, r), z));
-			}
-		`, "N", n.Symbols, "Entrypoint", fnName, "Inner", k.EntrypointName)
+		AppendWGSL(
+			&k,
+			`
+				fn {{.Entrypoint}}(p: {{.N.Dtype3}}) -> bool {
+					let r = {{.N.Len2}}({{.N.Make2}}({{.N.Get3X}}(p), {{.N.Get3Y}}(p)));
+					let z = {{.N.Get3Z}}(p);
+					return {{.Inner}}({{.N.Make2}}(r, z)) ||
+						{{.Inner}}({{.N.Make2}}({{.N.Sub}}({{.N.Zero}}, r), z));
+				}
+			`,
+			"N", n.Symbols,
+			"Entrypoint", fnName,
+			"Inner", k.EntrypointName,
+		)
 		k.Kind = Solid3D
 		k.EntrypointName = fnName
 		return k
 	}
 
 	normalizeName := genFunctionID(&k.IDs, "normalize_angle")
-	AppendWGSL(&k, `
+	AppendWGSL(
+		&k,
+		`
 			fn {{.Entrypoint}}(a: {{.N.Dtype}}) -> {{.N.Dtype}} {
 				var result = a;
 				for (var i = 0; i < 32; i++) {
@@ -174,10 +198,16 @@ func RevolveSolidRange(n Numerics, k ShapeKernel, angleRad float64, startRad flo
 				}
 				return result;
 			}
-		`, "N", n.Symbols, "Entrypoint", normalizeName, "TwoPi", n.Literal(2*math.Pi))
+		`,
+		"N", n.Symbols,
+		"Entrypoint", normalizeName,
+		"TwoPi", n.Literal(2*math.Pi),
+	)
 
 	fnName := genFunctionID(&k.IDs, "revolve_solid_range")
-	AppendWGSL(&k, `
+	AppendWGSL(
+		&k,
+		`
 			fn {{.Entrypoint}}(p: {{.N.Dtype3}}) -> bool {
 				let x = {{.N.Get3X}}(p);
 				let y = {{.N.Get3Y}}(p);
@@ -250,7 +280,9 @@ func InsetExtrude(
 	k.Code += "\n" + insetExtrudeSideCode(n, topInsetName, z0, z1, top, false, topFn)
 
 	fnName := genFunctionID(&k.IDs, "inset_extrude")
-	AppendWGSL(&k, `
+	AppendWGSL(
+		&k,
+		`
 			fn {{.Entrypoint}}(p: {{.N.Dtype3}}) -> bool {
 				let z = {{.N.Get3Z}}(p);
 				if ({{.N.Lt}}(z, {{.ZMin}}) || {{.N.Gt}}(z, {{.ZMax}})) {
@@ -300,7 +332,8 @@ func insetExtrudeSideCode(n Numerics, fnName string, z0, z1, radius float64, bot
 		panic(`inset extrude function must be "chamfer" or "fillet"`)
 	}
 
-	return WGSL(`
+	return WGSL(
+		`
 			fn {{.Entrypoint}}(z: {{.N.Dtype}}) -> {{.N.Dtype}} {
 				if ({{.N.Le}}({{.Radius}}, {{.N.Zero}})) {
 					return {{.N.Zero}};
@@ -313,5 +346,11 @@ func insetExtrudeSideCode(n Numerics, fnName string, z0, z1, radius float64, bot
 				let x = {{.N.Sub}}(frac, {{.N.One}});
 				{{.Body}}
 			}
-		`, "N", n.Symbols, "Entrypoint", fnName, "Radius", n.Literal(r), "DistExpr", distExpr, "Body", body)
+		`,
+		"N", n.Symbols,
+		"Entrypoint", fnName,
+		"Radius", n.Literal(r),
+		"DistExpr", distExpr,
+		"Body", body,
+	)
 }

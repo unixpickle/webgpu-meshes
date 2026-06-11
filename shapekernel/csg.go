@@ -57,11 +57,18 @@ func SubtractSolid(n Numerics, positive, negative ShapeKernel) ShapeKernel {
 	k.Buffers = append(append([]Buffer{}, k.Buffers...), nextK.Buffers...)
 	k.Code += "\n" + nextK.Code
 	fnName := genFunctionID(&k.IDs, "subtract_solid")
-	AppendWGSL(&k, `
+	AppendWGSL(
+		&k,
+		`
 			fn {{.Entrypoint}}(p: {{.ArgType}}) -> bool {
 				return {{.Positive}}(p) && !{{.Negative}}(p);
 			}
-		`, "Entrypoint", fnName, "ArgType", k.Kind.ArgType(n), "Positive", k.EntrypointName, "Negative", nextK.EntrypointName)
+		`,
+		"Entrypoint", fnName,
+		"ArgType", k.Kind.ArgType(n),
+		"Positive", k.EntrypointName,
+		"Negative", nextK.EntrypointName,
+	)
 	k.EntrypointName = fnName
 	return k
 }
@@ -80,11 +87,20 @@ func SubtractSDF(n Numerics, positive, negative ShapeKernel) ShapeKernel {
 	k.Buffers = append(append([]Buffer{}, k.Buffers...), nextK.Buffers...)
 	k.Code += "\n" + nextK.Code
 	fnName := genFunctionID(&k.IDs, "subtract_sdf")
-	AppendWGSL(&k, `
+	AppendWGSL(
+		&k,
+		`
 			fn {{.Entrypoint}}(p: {{.ArgType}}) -> {{.ReturnType}} {
 				return {{.N.Min}}({{.Positive}}(p), {{.N.Sub}}({{.N.Zero}}, {{.Negative}}(p)));
 			}
-		`, "N", n.Symbols, "Entrypoint", fnName, "ArgType", k.Kind.ArgType(n), "ReturnType", k.Kind.ReturnType(n), "Positive", k.EntrypointName, "Negative", nextK.EntrypointName)
+		`,
+		"N", n.Symbols,
+		"Entrypoint", fnName,
+		"ArgType", k.Kind.ArgType(n),
+		"ReturnType", k.Kind.ReturnType(n),
+		"Positive", k.EntrypointName,
+		"Negative", nextK.EntrypointName,
+	)
 	k.EntrypointName = fnName
 	return k
 }
@@ -114,11 +130,17 @@ func solidBooleanOp(n Numerics, solids []ShapeKernel, op, name string) ShapeKern
 	}
 
 	fnName := genFunctionID(&k.IDs, name+"_solid")
-	AppendWGSL(&k, `
+	AppendWGSL(
+		&k,
+		`
 			fn {{.Entrypoint}}(p: {{.ArgType}}) -> bool {
 				return {{.Expr}};
 			}
-		`, "Entrypoint", fnName, "ArgType", k.Kind.ArgType(n), "Expr", strings.Join(orCode, " "+op+" "))
+		`,
+		"Entrypoint", fnName,
+		"ArgType", k.Kind.ArgType(n),
+		"Expr", strings.Join(orCode, " "+op+" "),
+	)
 	k.EntrypointName = fnName
 	return k
 }
@@ -129,11 +151,18 @@ func clipSolid(n Numerics, k ShapeKernel, minVec, maxVec Vector) ShapeKernel {
 		return k
 	}
 	fnName := genFunctionID(&k.IDs, "clip_solid")
-	AppendWGSL(&k, `
+	AppendWGSL(
+		&k,
+		`
 			fn {{.Entrypoint}}(p: {{.ArgType}}) -> bool {
 				return {{.Inner}}(p) && ({{.Conditions}});
 			}
-		`, "Entrypoint", fnName, "ArgType", k.Kind.ArgType(n), "Inner", k.EntrypointName, "Conditions", strings.Join(conditions, " && "))
+		`,
+		"Entrypoint", fnName,
+		"ArgType", k.Kind.ArgType(n),
+		"Inner", k.EntrypointName,
+		"Conditions", strings.Join(conditions, " && "),
+	)
 	k.EntrypointName = fnName
 	return k
 }
@@ -146,11 +175,20 @@ func clipSDF(n Numerics, k ShapeKernel, minVec, maxVec Vector) ShapeKernel {
 	k.IDs = clipFieldCode.IDs
 	k.Code += "\n" + clipFieldCode.Code
 	fnName := genFunctionID(&k.IDs, "clip_sdf")
-	AppendWGSL(&k, `
+	AppendWGSL(
+		&k,
+		`
 			fn {{.Entrypoint}}(p: {{.ArgType}}) -> {{.ReturnType}} {
 				return {{.N.Min}}({{.Inner}}(p), {{.ClipField}}(p));
 			}
-		`, "N", n.Symbols, "Entrypoint", fnName, "ArgType", k.Kind.ArgType(n), "ReturnType", k.Kind.ReturnType(n), "Inner", k.EntrypointName, "ClipField", clipFieldName)
+		`,
+		"N", n.Symbols,
+		"Entrypoint", fnName,
+		"ArgType", k.Kind.ArgType(n),
+		"ReturnType", k.Kind.ReturnType(n),
+		"Inner", k.EntrypointName,
+		"ClipField", clipFieldName,
+	)
 	k.EntrypointName = fnName
 	return k
 }
@@ -207,15 +245,16 @@ func clipFieldKernel(n Numerics, ids IDTracker, kind ShapeKind, minVec, maxVec V
 	return ShapeKernel{
 		Kind: kind,
 		IDs:  ids,
-		Code: WGSL(`
-					fn {{.Entrypoint}}(p: {{.ArgType}}) -> {{.ReturnType}} {
-						{{.OutsideLets}}
-						if ({{.Conditions}}) {
-							return {{.InsideExpr}};
-						}
-						return {{.N.Sub}}({{.N.Zero}}, {{.OutsideExpr}});
+		Code: WGSL(
+			`
+				fn {{.Entrypoint}}(p: {{.ArgType}}) -> {{.ReturnType}} {
+					{{.OutsideLets}}
+					if ({{.Conditions}}) {
+						return {{.InsideExpr}};
 					}
-				`,
+					return {{.N.Sub}}({{.N.Zero}}, {{.OutsideExpr}});
+				}
+			`,
 			"N", n.Symbols,
 			"Entrypoint", entrypointName,
 			"ArgType", kind.ArgType(n),
@@ -322,11 +361,18 @@ func sdfBooleanOp(n Numerics, sdfs []ShapeKernel, op, name string) ShapeKernel {
 	for _, call := range callCode[1:] {
 		valueExpr = WGSL("{{.Op}}({{.Left}}, {{.Right}})", "Op", op, "Left", valueExpr, "Right", call)
 	}
-	AppendWGSL(&k, `
+	AppendWGSL(
+		&k,
+		`
 			fn {{.Entrypoint}}(p: {{.ArgType}}) -> {{.ReturnType}} {
 				return {{.Expr}};
 			}
-		`, "Entrypoint", fnName, "ArgType", k.Kind.ArgType(n), "ReturnType", k.Kind.ReturnType(n), "Expr", valueExpr)
+		`,
+		"Entrypoint", fnName,
+		"ArgType", k.Kind.ArgType(n),
+		"ReturnType", k.Kind.ReturnType(n),
+		"Expr", valueExpr,
+	)
 	k.EntrypointName = fnName
 	return k
 }

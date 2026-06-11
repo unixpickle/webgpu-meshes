@@ -53,17 +53,27 @@ func Rotate2D(n Numerics, k ShapeKernel, angle float64) ShapeKernel {
 		panic("Rotate2D requires a 2D non-falloff kernel")
 	}
 	fnName := genFunctionID(&k.IDs, "rotate2d")
-	AppendWGSL(&k, `
+	AppendWGSL(
+		&k,
+		`
 			fn {{.Entrypoint}}(p: {{.ArgType}}) -> {{.ReturnType}} {
-				let cosA = {{.N.Cos}}({{.Angle}});
-				let sinA = {{.N.Sin}}({{.Angle}});
+				let cosA = {{.Cos}};
+				let sinA = {{.Sin}};
 				let newP = {{.N.Make2}}(
 					{{.N.Add}}({{.N.Mul}}(cosA, {{.N.Get2X}}(p)), {{.N.Mul}}(sinA, {{.N.Get2Y}}(p))),
 					{{.N.Sub}}({{.N.Mul}}(cosA, {{.N.Get2Y}}(p)), {{.N.Mul}}(sinA, {{.N.Get2X}}(p)))
 				);
 				return {{.Inner}}(newP);
 			}
-		`, "N", n.Symbols, "Entrypoint", fnName, "ArgType", k.Kind.ArgType(n), "ReturnType", k.Kind.ReturnType(n), "Angle", n.Literal(angle), "Inner", k.EntrypointName)
+		`,
+		"N", n.Symbols,
+		"Entrypoint", fnName,
+		"ArgType", k.Kind.ArgType(n),
+		"ReturnType", k.Kind.ReturnType(n),
+		"Cos", n.Literal(math.Cos(angle)),
+		"Sin", n.Literal(math.Sin(angle)),
+		"Inner", k.EntrypointName,
+	)
 	k.EntrypointName = fnName
 	return k
 }
@@ -74,11 +84,13 @@ func Rotate3D(n Numerics, k ShapeKernel, axis Vec3, angle float64) ShapeKernel {
 	}
 	unitAxis := unitAxis3D(axis)
 	fnName := genFunctionID(&k.IDs, "rotate3d")
-	AppendWGSL(&k, `
+	AppendWGSL(
+		&k,
+		`
 			fn {{.Entrypoint}}(p: {{.ArgType}}) -> {{.ReturnType}} {
 				let axis = {{.Axis}};
-				let cosA = {{.N.Cos}}({{.Angle}});
-				let sinA = {{.N.Sin}}({{.Angle}});
+				let cosA = {{.Cos}};
+				let sinA = {{.Sin}};
 				let term1 = {{.N.Scale3}}(p, cosA);
 				let term2 = {{.N.Scale3}}({{.N.Cross3}}(axis, p), sinA);
 				let oneMinusCos = {{.N.Sub}}({{.N.One}}, cosA);
@@ -86,7 +98,16 @@ func Rotate3D(n Numerics, k ShapeKernel, axis Vec3, angle float64) ShapeKernel {
 				let newP = {{.N.Add3}}({{.N.Sub3}}(term1, term2), term3);
 				return {{.Inner}}(newP);
 			}
-		`, "N", n.Symbols, "Entrypoint", fnName, "ArgType", k.Kind.ArgType(n), "ReturnType", k.Kind.ReturnType(n), "Axis", unitAxis.WebGPUVec(n), "Angle", n.Literal(angle), "Inner", k.EntrypointName)
+		`,
+		"N", n.Symbols,
+		"Entrypoint", fnName,
+		"ArgType", k.Kind.ArgType(n),
+		"ReturnType", k.Kind.ReturnType(n),
+		"Axis", unitAxis.WebGPUVec(n),
+		"Cos", n.Literal(math.Cos(angle)),
+		"Sin", n.Literal(math.Sin(angle)),
+		"Inner", k.EntrypointName,
+	)
 	k.EntrypointName = fnName
 	return k
 }
@@ -97,13 +118,23 @@ func Mirror2D(n Numerics, k ShapeKernel, axis Vec2) ShapeKernel {
 	}
 	unitAxis := unitAxis2D(axis)
 	fnName := genFunctionID(&k.IDs, "mirror2d")
-	AppendWGSL(&k, `
+	AppendWGSL(
+		&k,
+		`
 			fn {{.Entrypoint}}(p: {{.ArgType}}) -> {{.ReturnType}} {
 				let axis = {{.Axis}};
 				let newP = {{.N.Sub2}}(p, {{.N.Scale2}}(axis, {{.N.Mul}}({{.Two}}, {{.N.Dot2}}(axis, p))));
 				return {{.Inner}}(newP);
 			}
-		`, "N", n.Symbols, "Entrypoint", fnName, "ArgType", k.Kind.ArgType(n), "ReturnType", k.Kind.ReturnType(n), "Axis", unitAxis.WebGPUVec(n), "Two", n.Literal(2), "Inner", k.EntrypointName)
+		`,
+		"N", n.Symbols,
+		"Entrypoint", fnName,
+		"ArgType", k.Kind.ArgType(n),
+		"ReturnType", k.Kind.ReturnType(n),
+		"Axis", unitAxis.WebGPUVec(n),
+		"Two", n.Literal(2),
+		"Inner", k.EntrypointName,
+	)
 	k.EntrypointName = fnName
 	return k
 }
@@ -114,13 +145,23 @@ func Mirror3D(n Numerics, k ShapeKernel, axis Vec3) ShapeKernel {
 	}
 	unitAxis := unitAxis3D(axis)
 	fnName := genFunctionID(&k.IDs, "mirror3d")
-	AppendWGSL(&k, `
+	AppendWGSL(
+		&k,
+		`
 			fn {{.Entrypoint}}(p: {{.ArgType}}) -> {{.ReturnType}} {
 				let axis = {{.Axis}};
 				let newP = {{.N.Sub3}}(p, {{.N.Scale3}}(axis, {{.N.Mul}}({{.Two}}, {{.N.Dot3}}(axis, p))));
 				return {{.Inner}}(newP);
 			}
-		`, "N", n.Symbols, "Entrypoint", fnName, "ArgType", k.Kind.ArgType(n), "ReturnType", k.Kind.ReturnType(n), "Axis", unitAxis.WebGPUVec(n), "Two", n.Literal(2), "Inner", k.EntrypointName)
+		`,
+		"N", n.Symbols,
+		"Entrypoint", fnName,
+		"ArgType", k.Kind.ArgType(n),
+		"ReturnType", k.Kind.ReturnType(n),
+		"Axis", unitAxis.WebGPUVec(n),
+		"Two", n.Literal(2),
+		"Inner", k.EntrypointName,
+	)
 	k.EntrypointName = fnName
 	return k
 }
@@ -177,7 +218,9 @@ func Scale(n Numerics, k ShapeKernel, scales Vector) ShapeKernel {
 		divOp = n.Symbols.Div3
 	}
 	fnName := genFunctionID(&k.IDs, "scale")
-	AppendWGSL(&k, `
+	AppendWGSL(
+		&k,
+		`
 			fn {{.Entrypoint}}(p: {{.ArgType}}) -> {{.ReturnType}} {
 				let newP = {{.DivOp}}(p, {{.Scales}});
 				let inner = {{.Inner}}(newP);
@@ -201,11 +244,20 @@ func offsetSDF(n Numerics, k ShapeKernel, offset float64, name string) ShapeKern
 		panic("expected SDF kernel")
 	}
 	fnName := genFunctionID(&k.IDs, name+"_sdf")
-	AppendWGSL(&k, `
+	AppendWGSL(
+		&k,
+		`
 			fn {{.Entrypoint}}(p: {{.ArgType}}) -> {{.ReturnType}} {
 				return {{.N.Add}}({{.Inner}}(p), {{.Offset}});
 			}
-		`, "N", n.Symbols, "Entrypoint", fnName, "ArgType", k.Kind.ArgType(n), "ReturnType", k.Kind.ReturnType(n), "Inner", k.EntrypointName, "Offset", n.Literal(offset))
+		`,
+		"N", n.Symbols,
+		"Entrypoint", fnName,
+		"ArgType", k.Kind.ArgType(n),
+		"ReturnType", k.Kind.ReturnType(n),
+		"Inner", k.EntrypointName,
+		"Offset", n.Literal(offset),
+	)
 	k.EntrypointName = fnName
 	return k
 }
