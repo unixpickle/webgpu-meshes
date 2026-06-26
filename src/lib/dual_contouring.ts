@@ -758,7 +758,7 @@ function normalizeOptions(options: DualContouringWebGPUOptions): Required<Omit<D
     l2Penalty: options.l2Penalty ?? 0,
     triangleMode: options.triangleMode ?? 'max-min-area',
     bisectionSteps: options.bisectionSteps ?? 32,
-    normalStep: options.normalStep ?? 1e-4,
+    normalStep: options.normalStep ?? options.delta * 1e-3,
     bufferSize: options.bufferSize ?? DEFAULT_DUAL_CONTOUR_BUFFER_SIZE,
     workgroupSize: options.workgroupSize ?? 256,
     label: options.label ?? 'dual-contour-webgpu',
