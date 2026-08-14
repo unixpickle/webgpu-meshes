@@ -5,7 +5,15 @@ import "github.com/unixpickle/model3d/model3d"
 // Mesh3DSolid creates a solid using the even-odd rule to determine if points
 // are within a given triangle mesh.
 func Mesh3DSolid(n Numerics, m *model3d.Mesh) ShapeKernel {
-	bvh := newMesh3DBVH(m)
+	tris := m.TriangleSlice()
+	model3d.GroupTriangles(tris)
+	return GroupedTrianglesSolid(n, tris)
+}
+
+// GroupedTrianglesSolid is like Mesh3DSolid but takes already-grouped
+// triangles from a call to model3d.GroupedTriangles().
+func GroupedTrianglesSolid(n Numerics, tris []*model3d.Triangle) ShapeKernel {
+	bvh := newMesh3DBVH(tris)
 	numNodes := len(bvh.NodeData) / 4
 
 	ids := IDTracker{}
@@ -172,8 +180,16 @@ func Mesh3DSolid(n Numerics, m *model3d.Mesh) ShapeKernel {
 // Mesh3DSDF creates an SDF by combining the triangle distance with the
 // inside/outside test from Mesh3DSolid.
 func Mesh3DSDF(n Numerics, m *model3d.Mesh) ShapeKernel {
-	bvh := newMesh3DBVH(m)
-	solidKernel := Mesh3DSolid(n, m)
+	tris := m.TriangleSlice()
+	model3d.GroupTriangles(tris)
+	return GroupedTrianglesSDF(n, tris)
+}
+
+// GroupedTrianglesSDF is like Mesh3DSDF but uses an existing collection of
+// grouped triangles from the mesh from model3d.GroupedTriangles().
+func GroupedTrianglesSDF(n Numerics, tris []*model3d.Triangle) ShapeKernel {
+	bvh := newMesh3DBVH(tris)
+	solidKernel := GroupedTrianglesSolid(n, tris)
 	numNodes := len(solidKernel.Buffers[2].Constructor()) / 4
 	numTris := len(solidKernel.Buffers[0].Constructor()) / 9
 	queueSize := bvh.Height

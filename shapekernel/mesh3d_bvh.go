@@ -25,12 +25,8 @@ type mesh3DBVHBuilder struct {
 	Nodes     []mesh3DBVHNode
 }
 
-func newMesh3DBVH(m *model3d.Mesh) mesh3DBVH {
-	tris := append([]*model3d.Triangle{}, m.TriangleSlice()...)
-	if len(tris) > 1 {
-		model3d.GroupTriangles(tris)
-	}
-
+// newMesh3DBVH creates a BVH from already-grouped triangles.
+func newMesh3DBVH(tris []*model3d.Triangle) mesh3DBVH {
 	builder := &mesh3DBVHBuilder{Triangles: tris}
 	height := 0
 	if len(tris) > 0 {
