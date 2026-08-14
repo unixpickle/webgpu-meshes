@@ -11,6 +11,30 @@ const (
 
 type InsetFunction string
 
+// SliceSolid takes the XY cross-section of a 3D solid at a Z coordinate.
+// This can be considered the inverse of LinearExtrudeSolid().
+func SliceSolid(n Numerics, k ShapeKernel, z float64) ShapeKernel {
+	if k.Kind != Solid3D {
+		panic("expected 3D solid kernel")
+	}
+	fnName := genFunctionID(&k.IDs, "slice_solid")
+	AppendWGSL(
+		&k,
+		`
+			fn {{.Entrypoint}}(p: {{.N.Dtype2}}) -> bool {
+				return {{.Inner}}({{.N.Make3}}({{.N.Get2X}}(p), {{.N.Get2Y}}(p), {{.Z}}));
+			}
+		`,
+		"N", n.Symbols,
+		"Entrypoint", fnName,
+		"Inner", k.EntrypointName,
+		"Z", n.Literal(z),
+	)
+	k.Kind = Solid2D
+	k.EntrypointName = fnName
+	return k
+}
+
 // LinearExtrudeSolid extends a 2D shape along the Z axis, optionally centered,
 // twisted, and scaled from bottom to top.
 func LinearExtrudeSolid(n Numerics, k ShapeKernel, height float64, center bool, twist float64, scale Vec2) ShapeKernel {

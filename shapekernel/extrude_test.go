@@ -9,6 +9,29 @@ import (
 	"github.com/unixpickle/model3d/toolbox3d"
 )
 
+func TestSliceSolid(t *testing.T) {
+	center := model3d.XYZ(0.2, -0.3, 0.4)
+	sphere := &model3d.Sphere{Center: center, Radius: 0.9}
+	z := 0.75
+	referenceSolid := model3d.CrossSectionSolid(sphere, 2, z)
+
+	for _, tc := range []struct {
+		name string
+		n    Numerics
+	}{
+		{name: "Float32", n: SmokeFloat32Numerics},
+		{name: "Fixed64", n: Fixed64Numerics},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			kernel := SliceSolid(tc.n,
+				Translate(tc.n, SphereSolid(tc.n, sphere.Radius), Vec3{center.X, center.Y, center.Z}),
+				z,
+			)
+			testApproxSolid2D(t, referenceSolid, tc.n, kernel, 0.01, 0.02)
+		})
+	}
+}
+
 func TestLinearExtrudeSolid(t *testing.T) {
 	rect := model2d.NewRect(model2d.XY(-0.45, -0.25), model2d.XY(0.45, 0.25))
 	height := float64(1.4)
