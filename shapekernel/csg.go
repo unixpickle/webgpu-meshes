@@ -120,13 +120,13 @@ func solidBooleanOp(n Numerics, solids []ShapeKernel, op, name string) ShapeKern
 
 	k := solids[0]
 	k.Buffers = append([]Buffer{}, k.Buffers...)
-	orCode := []string{WGSL("{{.Fn}}(p)", "Fn", k.EntrypointName)}
+	mutationCode := []string{WGSL("var value = {{.Fn}}(p);", "Fn", k.EntrypointName)}
 	for i := 1; i < len(solids); i++ {
 		nextK := ShiftIDs(solids[i], k.IDs)
 		k.IDs = nextK.IDs
 		k.Buffers = append(k.Buffers, nextK.Buffers...)
 		k.Code += "\n" + nextK.Code
-		orCode = append(orCode, WGSL("{{.Fn}}(p)", "Fn", nextK.EntrypointName))
+		mutationCode = append(mutationCode, WGSL("value = value {{.Op}} {{.Fn}}(p);", "Op", op, "Fn", nextK.EntrypointName))
 	}
 
 	fnName := genFunctionID(&k.IDs, name+"_solid")
@@ -134,12 +134,13 @@ func solidBooleanOp(n Numerics, solids []ShapeKernel, op, name string) ShapeKern
 		&k,
 		`
 			fn {{.Entrypoint}}(p: {{.ArgType}}) -> bool {
-				return {{.Expr}};
+				{{.MutationCode}}
+				return value;
 			}
 		`,
 		"Entrypoint", fnName,
 		"ArgType", k.Kind.ArgType(n),
-		"Expr", strings.Join(orCode, " "+op+" "),
+		"MutationCode", strings.Join(mutationCode, "\n"),
 	)
 	k.EntrypointName = fnName
 	return k
@@ -347,31 +348,28 @@ func sdfBooleanOp(n Numerics, sdfs []ShapeKernel, op, name string) ShapeKernel {
 
 	k := sdfs[0]
 	k.Buffers = append([]Buffer{}, k.Buffers...)
-	callCode := []string{WGSL("{{.Fn}}(p)", "Fn", k.EntrypointName)}
+	mutationCode := []string{WGSL("var value = {{.Fn}}(p);", "Fn", k.EntrypointName)}
 	for i := 1; i < len(sdfs); i++ {
 		nextK := ShiftIDs(sdfs[i], k.IDs)
 		k.IDs = nextK.IDs
 		k.Buffers = append(k.Buffers, nextK.Buffers...)
 		k.Code += "\n" + nextK.Code
-		callCode = append(callCode, WGSL("{{.Fn}}(p)", "Fn", nextK.EntrypointName))
+		mutationCode = append(mutationCode, WGSL("value = {{.Op}}(value, {{.Fn}}(p));", "Op", op, "Fn", nextK.EntrypointName))
 	}
 
 	fnName := genFunctionID(&k.IDs, name+"_sdf")
-	valueExpr := callCode[0]
-	for _, call := range callCode[1:] {
-		valueExpr = WGSL("{{.Op}}({{.Left}}, {{.Right}})", "Op", op, "Left", valueExpr, "Right", call)
-	}
 	AppendWGSL(
 		&k,
 		`
 			fn {{.Entrypoint}}(p: {{.ArgType}}) -> {{.ReturnType}} {
-				return {{.Expr}};
+				{{.MutationCode}}
+				return value;
 			}
 		`,
 		"Entrypoint", fnName,
 		"ArgType", k.Kind.ArgType(n),
 		"ReturnType", k.Kind.ReturnType(n),
-		"Expr", valueExpr,
+		"MutationCode", strings.Join(mutationCode, "\n"),
 	)
 	k.EntrypointName = fnName
 	return k

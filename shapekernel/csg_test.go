@@ -25,6 +25,38 @@ func TestUnionSolid(t *testing.T) {
 	vals.ExpectBools(t, []bool{true, true, false, false, true})
 }
 
+func TestUnionManySphereSolids(t *testing.T) {
+	const sphereCount = 2000
+	spheres := make([]ShapeKernel, sphereCount)
+	for i := range spheres {
+		spheres[i] = SphereSolid(SmokeFloat32Numerics, 1)
+	}
+	joined := UnionSolids(SmokeFloat32Numerics, spheres)
+	vals := ExecuteShapeKernel(
+		t,
+		kernelToNative(SmokeFloat32Numerics, joined),
+		Vec3{0, 0, 0},
+		Vec3{2, 0, 0},
+	)
+	vals.ExpectBools(t, []bool{true, false})
+}
+
+func TestUnionManySphereSDFs(t *testing.T) {
+	const sphereCount = 2000
+	spheres := make([]ShapeKernel, sphereCount)
+	for i := range spheres {
+		spheres[i] = SphereSDF(SmokeFloat32Numerics, 1)
+	}
+	joined := UnionSDFs(SmokeFloat32Numerics, spheres)
+	vals := ExecuteShapeKernel(
+		t,
+		kernelToNative(SmokeFloat32Numerics, joined),
+		Vec3{0, 0, 0},
+		Vec3{2, 0, 0},
+	)
+	vals.ExpectFloats(t, []float32{1, -1}, 1e-4)
+}
+
 func TestSubtractSolid2D(t *testing.T) {
 	positive := &model2d.Circle{Radius: 0.85}
 	negative := model2d.TransformSolid(
